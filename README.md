@@ -1,74 +1,73 @@
 # Perception Pipeline v3.1
 
-摄像头视频流 → 结构化场景 JSON，给下游 LLM/Claw 做决策。
+Camera video stream → structured scene JSON for downstream LLM/Claw decision-making.
 
-## 快速开始
+## Quick Start
 
 ```bash
 pip install -r requirements.txt
 
-# 接摄像头直接跑
+# USB camera
 python main.py
 
-# 全功能（可视化 + GUI 调参 + WebSocket + 深度估计）
+# Full feature (visualization + GUI + WebSocket + depth)
 python main.py --gui --ws --depth
 
-# 没摄像头用 dry-run 验证
+# No camera — synthetic data for testing
 python main.py --dry-run
 ```
 
-## 架构
+## Architecture
 
 ```
 Camera (USB/RTSP/file)
-  → FrameGrabber        独立 daemon 线程读帧，只保留最新帧，网络流断线自动重连
-    → YOLOv8 + ByteTrack  检测 + 跟踪，输出带 track_id 的 bbox
-      → Kalman Filter     2D 卡尔曼滤波，平滑位置和速度，去除检测抖动
-        → SceneBuilder    检测结果 → 归一化场景 JSON（坐标/速度/区域/风险）
-          → SceneDiffer   和上一帧对比，生成 changes 列表（给 LLM 直接读）
-            → OutputController  控制输出频率（4 种策略）
-              → OutputHandler   输出到 print / file / callback
-              → WebSocket       JSON-RPC 2.0 推送给 Claw/Agent
-            → Visualizer        OpenCV 叠加检测框/区域线/信息面板
-  → DepthEstimator       Depth Anything v2 单目深度估计（可选）
+  → FrameGrabber        Daemon thread, keeps latest frame only, auto-reconnect for network streams
+    → YOLOv8 + ByteTrack  Detection + tracking, persistent track IDs
+      → Kalman Filter     2D Kalman smoothing on position and velocity, removes detection jitter
+        → SceneBuilder    Detection results → normalized scene JSON (coords/velocity/regions/risk)
+          → SceneDiffer   Frame-to-frame diff → changes list (LLM reads this directly)
+            → OutputController  Output frequency control (4 strategies)
+              → OutputHandler   Output to print / file / callback
+              → WebSocket       JSON-RPC 2.0 push to Claw/Agent
+            → Visualizer        OpenCV overlay (bboxes/grid/FPS/risk panel)
+  → DepthEstimator       Depth Anything v2 monocular depth estimation (optional)
 ```
 
-## 技术栈
+## Tech Stack
 
-| 组件 | 技术 | 说明 |
-|------|------|------|
-| 检测 | YOLOv8n (ultralytics) | 轻量模型，CPU 也能跑 |
-| 跟踪 | ByteTrack | ultralytics 内置，track_id 持续 |
-| 深度 | Depth Anything v2 Small (HuggingFace transformers) | 单目相对深度，lazy load，首次下载 ~100MB |
-| 平滑 | 手写 2D Kalman Filter (numpy) | 状态 [x, y, vx, vy]，无额外依赖 |
-| 视频 | OpenCV VideoCapture | 支持 USB(int)、RTSP(str)、本地文件(str) |
-| WS | websockets 16 + JSON-RPC 2.0 | 和 OpenClaw Gateway 协议一致 |
-| GUI | tkinter | Python 内置，daemon 线程运行 |
+| Component | Technology | Notes |
+|-----------|-----------|-------|
+| Detection | YOLOv8n (ultralytics) | Lightweight, runs on CPU or GPU |
+| Tracking | ByteTrack | Built into ultralytics, persistent track IDs |
+| Depth | Depth Anything v2 Small (HuggingFace transformers) | Monocular relative depth, lazy-loaded, ~100MB download on first use |
+| Smoothing | Hand-rolled 2D Kalman Filter (numpy) | State vector [x, y, vx, vy], zero extra dependencies |
+| Video I/O | OpenCV VideoCapture | USB (int), RTSP (str), local file (str) |
+| WebSocket | websockets 16 + JSON-RPC 2.0 | Compatible with OpenClaw Gateway protocol |
+| GUI | tkinter | Python built-in, runs in daemon thread |
 
-## 模块说明
+## Modules
 
 ```
-perception/
-├── main.py                 入口，CLI 参数，graceful shutdown (SIGINT/SIGTERM)
-├── config.py               DEFAULT_CONFIG（31 个配置项，全在这里）
-├── frame_grabber.py        独立线程读帧 + 断线重连 + 运行时切换源
-├── scene_builder.py        YOLO 结果 → 归一化 JSON（集成 Kalman + Depth）
-├── kalman_tracker.py       每个 tracked object 一个 2D Kalman 实例
-├── scene_differ.py         两帧对比 → changes 列表（LLM 直接消费）
-├── depth_estimator.py      Depth Anything v2 封装，30s 超时，失败自动禁用
-├── output_controller.py    4 种输出策略: every_frame / interval / on_change / hybrid
-├── output_handler.py       print / file(JSONL) / callback 输出
-├── visualizer.py           OpenCV 叠加（检测框/九宫格/FPS/风险面板）
-├── metrics.py              延迟 P50/P95、FPS、pipeline 状态机
-├── perception_service.py   编程 API（start/stop/subscribe/get_latest_scene）
-├── ws_server.py            WebSocket JSON-RPC 2.0 服务端
-├── config_gui.py           tkinter 运行时调参面板
-├── dry_run.py              合成数据生成器（不需要摄像头/模型）
+├── main.py                 Entry point, CLI args, graceful shutdown (SIGINT/SIGTERM)
+├── config.py               DEFAULT_CONFIG (31 config keys, all centralized here)
+├── frame_grabber.py        Threaded frame reader + reconnection + runtime source switching
+├── scene_builder.py        YOLO results → normalized JSON (integrates Kalman + Depth)
+├── kalman_tracker.py       Per-object 2D Kalman filter instances
+├── scene_differ.py         Frame-to-frame diff → changes list for LLM consumption
+├── depth_estimator.py      Depth Anything v2 wrapper, 30s load timeout, auto-disable on failure
+├── output_controller.py    4 output strategies: every_frame / interval / on_change / hybrid
+├── output_handler.py       print / file (JSONL) / callback output
+├── visualizer.py           OpenCV overlay (bboxes / 3x3 grid / FPS / risk panel)
+├── metrics.py              Latency P50/P95, FPS, pipeline state machine
+├── perception_service.py   Programmatic API (start/stop/subscribe/get_latest_scene)
+├── ws_server.py            WebSocket JSON-RPC 2.0 server
+├── config_gui.py           tkinter runtime config panel
+├── dry_run.py              Synthetic data generator (no camera/model needed)
 ├── requirements.txt
-└── tests/                  pytest 测试套件（37 tests）
+└── tests/                  pytest suite (37 tests)
 ```
 
-## JSON 输出格式
+## JSON Output Schema
 
 ```json
 {
@@ -112,7 +111,7 @@ perception/
   ],
   "changes": [
     "region_change: person #3 moved from top_center to middle_center",
-    "risk_change: low → medium"
+    "risk_change: low -> medium"
   ],
   "scene": {
     "object_count": 1,
@@ -133,48 +132,47 @@ perception/
 }
 ```
 
-**关键字段：**
-- `position.rel_x/rel_y` — 归一化坐标 (0-1)，分辨率无关
-- `position.smoothed_x/y` — Kalman 平滑后坐标，给硬件控制用
-- `motion.vx/vy` — 归一化速度向量 (rel/sec)
-- `depth.value` — 0=最近 1=最远（相对深度，需要 `--depth`）
-- `changes` — 和上一帧的差异描述，LLM 直接读这个做决策
+**Key fields:**
+- `position.rel_x/rel_y` — Normalized coordinates (0-1), resolution-independent
+- `position.smoothed_x/y` — Kalman-smoothed coordinates for hardware control
+- `motion.vx/vy` — Normalized velocity vector (rel units/sec)
+- `depth.value` — 0=nearest, 1=farthest (relative depth, requires `--depth`)
+- `changes` — Human-readable diff from previous frame, LLM reads this directly for decisions
 - `pipeline.state` — running / degraded / error
 
 ## WebSocket API (JSON-RPC 2.0)
 
-端口 18790，用 `--ws` 启动。
+Port 18790, enabled with `--ws`.
 
 ```
-scene/latest    → 获取最新场景 JSON
-scene/subscribe → 订阅场景推送
-config/set      → 修改配置 {"key": "min_confidence", "value": 0.5}
-source/switch   → 切换视频源 {"source": "rtsp://..."}
-status/health   → 健康状态 (fps, latency, state)
+scene/latest    → Get latest scene JSON
+scene/subscribe → Subscribe to scene push updates
+config/set      → Update config  {"key": "min_confidence", "value": 0.5}
+source/switch   → Switch video source  {"source": "rtsp://..."}
+status/health   → Health status (fps, latency, state)
 ```
 
-## CLI 参数
+## CLI Arguments
 
 ```
---source PATH       视频源（0=USB, rtsp://..., video.mp4）
---model PATH        YOLO 模型路径（默认 yolov8n.pt）
---process-fps N     检测帧率（默认 10）
---strategy NAME     输出策略: every_frame / interval / on_change / hybrid
---interval SEC      输出间隔秒数
---output METHOD     输出方式: print / file / callback
---classes A B C     只检测这些类别
---depth             启用深度估计
---depth-model SIZE  深度模型: small / base / large
---gui               打开配置 GUI
---ws                启动 WebSocket 服务
---ws-port PORT      WS 端口（默认 18790）
---no-viz            关闭可视化窗口
---dry-run           合成数据模式（不需要摄像头）
+--source PATH       Video source (0=USB, rtsp://..., video.mp4)
+--model PATH        YOLO model path (default: yolov8n.pt)
+--process-fps N     Detection frame rate (default: 10)
+--strategy NAME     Output strategy: every_frame / interval / on_change / hybrid
+--interval SEC      Output interval in seconds
+--output METHOD     Output method: print / file / callback
+--classes A B C     Only detect these classes
+--depth             Enable depth estimation
+--depth-model SIZE  Depth model size: small / base / large
+--gui               Open config GUI panel
+--ws                Start WebSocket server
+--ws-port PORT      WebSocket port (default: 18790)
+--no-viz            Disable visualization window
+--dry-run           Synthetic data mode (no camera needed)
 ```
 
-## 测试
+## Tests
 
 ```bash
-cd perception
 python -m pytest tests/ -v
 ```
