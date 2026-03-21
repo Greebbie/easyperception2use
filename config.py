@@ -1,6 +1,11 @@
 """Default configuration for the Perception Pipeline."""
 
 DEFAULT_CONFIG: dict = {
+    # =========================================================================
+    # CORE — Always-active 2D pipeline
+    # Detection + Tracking + Kalman + Output + WebSocket
+    # =========================================================================
+
     # === Input ===
     "source": 0,                        # 0=USB, "rtsp://...", "video.mp4"
 
@@ -41,21 +46,33 @@ DEFAULT_CONFIG: dict = {
     "max_retries": 5,                   # reconnect attempts for network streams
     "retry_interval": 3.0,             # reconnect interval (seconds)
 
-    # === Visualization ===
-    "show_visualization": True,
-    "viz_window_name": "Perception Pipeline",
-    "viz_scale": 1.0,
-
-    # === Depth Estimation ===
-    "depth_enabled": False,             # opt-in, off by default
-    "depth_model_size": "small",        # "small" / "base" / "large"
-    "depth_device": "auto",             # "auto" / "cuda" / "cpu"
-
-    # === GUI ===
-    "show_gui": False,                  # opt-in, off by default
-
     # === WebSocket Server ===
     "ws_enabled": False,                # opt-in, off by default
     "ws_host": "0.0.0.0",              # bind address
     "ws_port": 18790,                   # port (avoids OpenClaw Gateway 18789)
+
+    # =========================================================================
+    # ENHANCEMENT — Opt-in modules (not part of core 2D pipeline)
+    # =========================================================================
+
+    # === Depth Estimation (--depth flag) ===
+    # Pluggable module. Provides relative depth only (not metric distance).
+    # Useful for coarse near/far ordering; not reliable for closed-loop grasping.
+    # Requires: pip install -r requirements-depth.txt
+    "depth_enabled": False,             # off by default, enable with --depth
+    "depth_model_size": "small",        # "small" / "base" / "large"
+    "depth_device": "auto",             # "auto" / "cuda" / "cpu"
+
+    # =========================================================================
+    # DEBUG — Development tools (not for production)
+    # =========================================================================
+
+    # === Visualization (--no-viz to disable) ===
+    "show_visualization": True,
+    "viz_window_name": "Perception Pipeline",
+    "viz_scale": 1.0,
+
+    # === Config GUI (--gui flag) ===
+    # Debug panel for runtime parameter tuning during development.
+    "show_gui": False,                  # debug tool, not for production
 }

@@ -1,8 +1,21 @@
-"""Monocular depth estimation using Depth Anything v2 with error handling."""
+"""
+Monocular depth estimation using Depth Anything v2.
+
+ENHANCEMENT MODULE — not part of the core 2D pipeline.
+This module is opt-in (--depth flag) and gracefully degrades
+if transformers/torch are not installed.
+"""
 
 import threading
 import numpy as np
 from typing import Optional
+
+try:
+    import torch
+    from transformers import pipeline as hf_pipeline
+    _HAS_TRANSFORMERS = True
+except ImportError:
+    _HAS_TRANSFORMERS = False
 
 
 class DepthEstimator:
@@ -46,8 +59,11 @@ class DepthEstimator:
 
         def _do_load():
             try:
-                import torch
-                from transformers import pipeline
+                if not _HAS_TRANSFORMERS:
+                    raise ImportError(
+                        "transformers and/or torch not installed. "
+                        "Install with: pip install -r requirements-depth.txt"
+                    )
 
                 if self.device == "auto":
                     self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -61,7 +77,7 @@ class DepthEstimator:
 
                 print(f"[DepthEstimator] Loading {model_id} on {self.device}...")
 
-                self._model = pipeline(
+                self._model = hf_pipeline(
                     "depth-estimation",
                     model=model_id,
                     device=self.device,

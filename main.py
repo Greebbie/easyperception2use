@@ -250,14 +250,19 @@ def _run_live(config: dict) -> None:
 
             t_detect = time.time()
 
-            # Depth estimation
-            depth_map = None
+            # Depth estimation (pluggable — only runs when explicitly enabled)
+            depth_fn = None
             if (depth_estimator
                     and depth_estimator.enabled
                     and config.get("depth_enabled")):
                 depth_map = depth_estimator.estimate(frame)
                 if depth_map is None and depth_estimator._load_failed:
                     metrics.add_degraded_module("depth")
+                elif depth_map is not None:
+                    from depth_estimator import DepthEstimator
+                    depth_fn = lambda bbox_px, _dm=depth_map: (
+                        DepthEstimator.get_object_depth(_dm, bbox_px)
+                    )
 
             t_depth = time.time()
 
@@ -268,7 +273,7 @@ def _run_live(config: dict) -> None:
             }
 
             scene_json = builder.build(
-                results, now, depth_map=depth_map, latency_ms=None
+                results, now, depth_fn=depth_fn, latency_ms=None
             )
 
             t_output = time.time()
@@ -460,12 +465,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true",
                         help="Run with synthetic data (no camera/model needed)")
     parser.add_argument("--depth", action="store_true",
-                        help="Enable depth estimation (Depth Anything v2)")
+                        help="Enable depth estimation (optional enhancement, "
+                             "requires requirements-depth.txt)")
     parser.add_argument("--depth-model", default=None,
                         choices=["small", "base", "large"],
                         help="Depth model size")
     parser.add_argument("--gui", action="store_true",
-                        help="Show configuration GUI panel")
+                        help="Open debug config panel (development use)")
     parser.add_argument("--ws", action="store_true",
                         help="Start WebSocket server (JSON-RPC 2.0)")
     parser.add_argument("--ws-port", type=int, default=None,

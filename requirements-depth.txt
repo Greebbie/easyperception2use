@@ -1,0 +1,4 @@
+# Optional — only needed when depth estimation is enabled (--depth flag)
+# Install with: pip install -r requirements-depth.txt
+transformers>=4.35.0
+torch

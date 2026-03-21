@@ -50,7 +50,7 @@ class SceneBuilder:
         self,
         results,
         timestamp: float,
-        depth_map: Optional[np.ndarray] = None,
+        depth_fn=None,
         latency_ms: Optional[dict[str, float]] = None,
     ) -> dict:
         """
@@ -59,7 +59,8 @@ class SceneBuilder:
         Args:
             results: Ultralytics model.track() return value
             timestamp: current frame timestamp (time.time())
-            depth_map: optional HxW float32 depth map (0=near, 1=far)
+            depth_fn: optional callable(bbox_px) -> {"value": float, "label": str}
+                      Injected by caller when depth estimation is enabled.
             latency_ms: optional latency breakdown dict
 
         Returns:
@@ -147,12 +148,9 @@ class SceneBuilder:
                 "motion": motion,
             }
 
-            # Add depth info if depth map is available
-            if depth_map is not None:
-                from depth_estimator import DepthEstimator
-                obj_dict["depth"] = DepthEstimator.get_object_depth(
-                    depth_map, bbox_px
-                )
+            # Add depth info via injected callable (no depth import needed)
+            if depth_fn is not None:
+                obj_dict["depth"] = depth_fn(bbox_px)
 
             objects.append(obj_dict)
 
