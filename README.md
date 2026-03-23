@@ -1,41 +1,43 @@
-# Perception Pipeline v3.2 — OpenClaw 视觉感知模块
+**English** | **[中文](README_CN.md)**
 
-摄像头画面 → 结构化场景 JSON。是 OpenClaw 机械臂的**眼睛**，不是大脑。
+# Perception Pipeline v3.2 — OpenClaw Vision Module
 
-所有计算在这里完成（检测、跟踪、滤波、补偿、场景分析）。中枢拿到数据直接用，不需要再算。
+Camera feed → structured scene JSON. The **eyes** of the OpenClaw robot arm, not the brain.
 
-## 职责边界
+All computation happens here (detection, tracking, filtering, compensation, scene analysis). The central controller receives ready-to-use data — no further processing needed.
 
-| 感知模块（本项目） | 中枢（不在本项目） |
+## Responsibility Boundary
+
+| Perception Module (this project) | Central Controller (separate project) |
 |---|---|
-| 所有"算"的事：模型推理、滤波、补偿、场景分析 | 所有"想"的事：抓什么、优先级、运动规划 |
-| 输出：干净的结构化 JSON | 输入：本模块的 JSON，直接用不需要再算 |
-| 告诉中枢"我看到了什么、在哪、往哪动、数据能不能信" | 决定"要不要抓、怎么抓、先抓哪个" |
+| All "computing": model inference, filtering, compensation, scene analysis | All "thinking": what to grab, priority, motion planning |
+| Output: clean structured JSON | Input: our JSON, used directly without further calculation |
+| Tells the controller "what I see, where it is, how it moves, whether to trust the data" | Decides "whether to grab, how to grab, what to grab first" |
 
-**设计原则：感知和决策分离，各自独立迭代。** 感知模块不需要知道中枢要干什么。
+**Design principle: Perception and decision-making are separated, iterated independently.** The perception module doesn't need to know what the controller will do.
 
-## 环境要求
+## Requirements
 
 - **Python** 3.10+
-- **核心依赖**（`requirements.txt`）：ultralytics (YOLOv8)、opencv-python、numpy、websockets、pytest
-- **Depth 可选依赖**（`requirements-depth.txt`）：transformers、torch（~2GB，仅在 `--depth` 时需要）
-- **GPU**：可选。YOLO 和 Depth 在 CPU 上可用，GPU (CUDA) 会更快
+- **Core dependencies** (`requirements.txt`): ultralytics (YOLOv8), opencv-python, numpy, websockets, pytest
+- **Depth optional** (`requirements-depth.txt`): transformers, torch (~2GB, only needed with `--depth`)
+- **GPU**: Optional. YOLO and Depth work on CPU; GPU (CUDA) is faster
 
 ```bash
-pip install -r requirements.txt                  # 核心（必装）
-pip install -r requirements-depth.txt            # Depth 增强（可选）
+pip install -r requirements.txt                  # Core (required)
+pip install -r requirements-depth.txt            # Depth enhancement (optional)
 ```
 
 ## Quick Start
 
 ```bash
-python main.py                     # 自动检测 USB 摄像头
-python main.py --gui               # 摄像头 + GUI 调试面板 + 可视化
-python main.py --ws --compact      # 生产模式：WebSocket 推送 + 紧凑 JSON
-python main.py --dry-run           # 无摄像头，合成数据测试
+python main.py                     # Auto-detect USB camera
+python main.py --gui               # Camera + GUI debug panel + visualization
+python main.py --ws --compact      # Production: WebSocket push + compact JSON
+python main.py --dry-run           # No camera, synthetic data for testing
 ```
 
-## 架构
+## Architecture
 
 ```
 Camera (auto-detect / USB / RTSP / file)
@@ -52,164 +54,164 @@ Camera (auto-detect / USB / RTSP / file)
   → DepthEstimator          Depth Anything v2 (optional, --depth)
 ```
 
-## 支持的视频源
+## Supported Video Sources
 
-| 类型 | 示例 | 说明 |
-|------|------|------|
-| USB 摄像头 | `--source 0` 或 `--source auto` | 自动检测 USB/UVC 摄像头，当前开发用 |
-| RTSP 流 | `--source rtsp://192.168.1.100:554/stream` | 无线 IP 摄像头、WiFi 摄像头、网络摄像头 |
-| HTTP 流 | `--source http://192.168.1.100:8080/video` | ESP32-CAM、手机 IP 摄像头 |
-| 视频文件 | `--source video.mp4` | 录像回放、离线测试 |
-| 合成数据 | `--dry-run` | 无硬件测试，开发用 |
+| Type | Example | Notes |
+|------|---------|-------|
+| USB Camera | `--source 0` or `--source auto` | Auto-detects USB/UVC cameras |
+| RTSP Stream | `--source rtsp://192.168.1.100:554/stream` | Wireless IP cameras, WiFi cameras |
+| HTTP Stream | `--source http://192.168.1.100:8080/video` | ESP32-CAM, phone IP camera apps |
+| Video File | `--source video.mp4` | Playback, offline testing |
+| Synthetic | `--dry-run` | No hardware needed, for development |
 
-**无线摄像头**：任何支持 RTSP/HTTP 推流的无线摄像头（WiFi IP 摄像头、手机 IP Camera app 等）都可以直接接入，不需要改代码。FrameGrabber 内置断线自动重连（最多 5 次，间隔 3 秒）。
+**Wireless cameras**: Any camera supporting RTSP/HTTP streaming works out of the box. FrameGrabber has built-in auto-reconnect (up to 5 retries, 3s interval).
 
-**运行时切换**：通过 WebSocket `source/switch` 或 GUI 面板可以在运行中切换视频源，不需要重启。
+**Runtime switching**: Switch video sources at runtime via WebSocket `source/switch` or the GUI panel — no restart required.
 
-## 关键设计决策
+## Key Design Decisions
 
-### 1. 为什么 2D 优先，不是 3D
+### 1. Why 2D First, Not 3D
 
-**决策：2D 管线是核心，Depth 是可选增强，相机标定是预留接口。**
+**Decision: 2D pipeline is the core. Depth is an optional enhancement. Camera calibration is a reserved interface.**
 
-2D 管线能准确做到的：
-- 目标存在性：画面里有没有杯子
-- 相对位置：杯子在画面中心偏左（归一化坐标 0-1）
-- 运动方向/速度：杯子在往右移
-- 场景变化：有人进来了、杯子消失了
-- 碰撞风险：中心区域有大物体
+What 2D can do accurately:
+- Object presence: is there a cup in the frame?
+- Relative position: cup is left-of-center (normalized coordinates 0-1)
+- Motion direction/speed: cup is moving right
+- Scene changes: a person entered, the cup disappeared
+- Collision risk: large object in center region
 
-2D 做不到的：
-- "杯子离我多远" → 归一化坐标不是物理距离
-- "两个杯子哪个更近" → 只能靠大小猜，不准
-- "机械臂要伸多长" → 需要真实深度 + 相机标定
+What 2D cannot do:
+- "How far is the cup?" — normalized coordinates are not physical distance
+- "Which cup is closer?" — can only guess by size, unreliable
+- "How far should the arm extend?" — needs real depth + camera calibration
 
-**为什么这样选**：对中枢做高层决策（"去抓那个杯子"、"停下来有人"）2D 完全够用。单目深度是相对值，闭环抓取用不了。2D 管线最容易调试——检测器漏了、跟踪漂了、还是控制逻辑有问题，一目了然。
+**Why this choice**: For high-level decisions ("grab that cup", "stop, there's a person"), 2D is sufficient. Monocular depth is relative-only, unusable for closed-loop grasping. The 2D pipeline is easiest to debug — you can tell whether it's a detector miss, tracker drift, or control logic error.
 
-### 2. Depth 能补什么、不能补什么
+### 2. What Depth Can and Cannot Do
 
-Depth Anything v2 输出**相对深度**（0-1 归一化，帧内排序），不是绝对距离。
+Depth Anything v2 outputs **relative depth** (0-1 normalized, per-frame ranking), not absolute distance.
 
-| Depth 能做 | Depth 不能做 |
-|-----------|-------------|
-| 杯子比瓶子近（相对排序） | 杯子距离 28.3cm（绝对距离） |
-| near / mid / far 标签 | 毫米级 3D 定位 |
-| 深度排序给中枢决策参考 | 闭环伺服抓取控制 |
+| Depth Can Do | Depth Cannot Do |
+|-------------|-----------------|
+| Cup is closer than bottle (relative ordering) | Cup is 28.3cm away (absolute distance) |
+| near / mid / far labels | Millimeter-level 3D localization |
+| Depth ordering for controller reference | Closed-loop servo grasping |
 
-**精确抓取需要**：真实深度硬件（双目 / ToF / RealSense）+ 相机标定 → `calibration_enabled` 接口已预留，等硬件到位再开。
+**For precise grasping**: Requires real depth hardware (stereo / ToF / RealSense) + camera calibration → `calibration_enabled` interface is reserved, to be activated when hardware is ready.
 
-### 3. Trust Model：为什么需要 actionable 标志
+### 3. Trust Model: Why the `actionable` Flag
 
-**决策：每帧标记数据可信度，机器人移动时自动降级。**
+**Decision: Every frame is tagged with data reliability. Auto-degrades when robot is moving.**
 
-| ego_state | actionable | 检测 | 位置 | 运动 | 场景 |
-|-----------|-----------|------|------|------|------|
+| ego_state | actionable | Detection | Position | Motion | Scene |
+|-----------|-----------|-----------|----------|--------|-------|
 | `stopped` | **true** | ✅ | ✅ | ✅ | ✅ |
 | `moving` | **false** | ✅ | ❌ | ❌ | ❌ |
 | `settling` | **false** | ✅ | ❌ | ❌ | ❌ |
 
-**为什么**：机器人移动时所有物体在画面中位移，静止的杯子看起来也在"移动"。只有 class + track_id + confidence 始终可靠。中枢应该在 `actionable=false` 时暂停位置相关决策。
+**Why**: When the robot moves, all objects shift in the frame. A stationary cup appears to "move". Only class + track_id + confidence remain reliable. The controller should pause position-dependent decisions when `actionable=false`.
 
-### 4. Pluggable 模块设计
+### 4. Pluggable Module Design
 
-**决策：所有增强功能都是可选插件，默认关闭，不增加核心依赖。**
+**Decision: All enhancements are optional plugins, off by default, no core dependency increase.**
 
-| 模块 | 默认 | 启用方式 | 依赖 |
-|------|------|---------|------|
-| Depth Anything v2 | 关 | `--depth` | transformers + torch |
-| 相机标定 | 关 | `calibration_enabled` (config) | 待实现 |
-| WebSocket 服务 | 关 | `--ws` | websockets |
-| GUI 调试面板 | 关 | `--gui` | tkinter (stdlib) |
+| Module | Default | Enable | Dependency |
+|--------|---------|--------|------------|
+| Depth Anything v2 | Off | `--depth` | transformers + torch |
+| Camera Calibration | Off | `calibration_enabled` (config) | To be implemented |
+| WebSocket Server | Off | `--ws` | websockets |
+| GUI Debug Panel | Off | `--gui` | tkinter (stdlib) |
 
-**为什么**：核心管线只依赖 ultralytics + opencv + numpy。生产部署时只装需要的。失败自动降级（depth 加载超时 → 自动关闭，管线继续跑）。
+**Why**: Core pipeline depends only on ultralytics + opencv + numpy. Production deploys only what's needed. Failures auto-degrade (depth load timeout → auto-disable, pipeline continues).
 
-### 5. 为什么 Kalman 用 Joseph form
+### 5. Why Joseph Form for Kalman
 
-**决策：用 Joseph 稳定形式替代标准 (I-KH)P 更新。**
+**Decision: Joseph stabilized form instead of the standard (I-KH)P update.**
 
-标准形式在长时间运行后协方差矩阵会丢失正定性（数值漂移），导致置信度计算出负数或 NaN。Joseph form `(I-KH)P(I-KH)^T + KRK^T` 保证协方差矩阵始终正定。已验证 2000 次迭代后特征值仍为正。
+The standard form loses positive-definiteness of the covariance matrix over long runs (numerical drift), causing negative confidence values or NaN. Joseph form `(I-KH)P(I-KH)^T + KRK^T` guarantees the covariance stays positive-definite. Verified: eigenvalues remain positive after 2000 iterations.
 
-### 6. 输出策略选择
+### 6. Output Strategy Selection
 
-| 策略 | 适用场景 | 中枢延迟 |
-|------|---------|---------|
-| `every_frame` | 调试 | 0ms（每帧输出，量大） |
-| `interval` | 遥操作 | 固定间隔（可预测） |
-| `on_change` | 事件驱动 | 仅变化时输出（不规律） |
-| **`hybrid`（推荐）** | **大多数机器人** | **间隔 + 突发事件都能响应** |
-| `stable` | LLM 决策 | 场景稳定后输出（延迟最高） |
+| Strategy | Use Case | Controller Latency |
+|----------|---------|-------------------|
+| `every_frame` | Debug | 0ms (every frame, high volume) |
+| `interval` | Teleoperation | Fixed interval (predictable) |
+| `on_change` | Event-driven | Output only on changes (irregular) |
+| **`hybrid` (recommended)** | **Most robots** | **Interval + burst on events** |
+| `stable` | LLM decisions | Output after scene stabilizes (highest latency) |
 
-### 7. 性能预期
+### 7. Performance
 
-| 指标 | 数值 | 条件 |
-|------|------|------|
-| YOLO 首帧 | ~300ms | 模型加载 |
-| YOLO 稳态 | ~20ms | YOLOv8n, 640x480 |
-| Kalman + 场景构建 | ~3ms | |
-| 光流补偿 | ~2ms | 160x120 降采样 |
-| Depth 首帧 | ~3.5s | CPU, 模型下载后 |
-| Depth 稳态 | ~300-400ms | CPU; GPU 更快 |
-| **端到端总延迟** | **~25ms (无 depth)** | |
-| **端到端总延迟** | **~350ms (有 depth, CPU)** | |
+| Metric | Value | Condition |
+|--------|-------|-----------|
+| YOLO first frame | ~300ms | Model loading |
+| YOLO steady-state | ~20ms | YOLOv8n, 640x480 |
+| Kalman + scene building | ~3ms | |
+| Optical flow | ~2ms | 160x120 downsampled |
+| Depth first frame | ~3.5s | CPU, after model download |
+| Depth steady-state | ~300-400ms | CPU; faster with GPU |
+| **End-to-end latency** | **~25ms (no depth)** | |
+| **End-to-end latency** | **~350ms (with depth, CPU)** | |
 
-## 感知能力
+## Capabilities
 
-| 能力 | 状态 | 说明 |
-|------|------|------|
-| 目标检测 + 跟踪 | ✅ | YOLOv8n + ByteTrack，persistent track ID |
-| 位置平滑 + 速度估计 | ✅ | Kalman 2D（Joseph form），position/velocity confidence |
-| 位置预测 | ✅ | Kalman 0.1s 前瞻，`predicted_next` |
-| 相机运动补偿 | ✅ | 光流 + 前景遮罩，自动降级 |
-| 场景语义分析 | ✅ | risk_level / center_occupied / stable / snapshot_quality |
-| 变化事件 | ✅ | entered / left / approaching / retreating / region_change / risk_change |
-| 深度估计 | ✅ 可选 | Depth Anything v2（相对深度，near/mid/far）|
-| 相机标定 + 世界坐标 | 🔧 预留 | config 接口已备，待硬件部署启用 |
+| Capability | Status | Details |
+|-----------|--------|---------|
+| Object detection + tracking | ✅ | YOLOv8n + ByteTrack, persistent track ID |
+| Position smoothing + velocity | ✅ | Kalman 2D (Joseph form), position/velocity confidence |
+| Position prediction | ✅ | Kalman 0.1s lookahead, `predicted_next` |
+| Camera motion compensation | ✅ | Optical flow + foreground masking, auto-degrade |
+| Scene semantic analysis | ✅ | risk_level / center_occupied / stable / snapshot_quality |
+| Change events | ✅ | entered / left / approaching / retreating / region_change / risk_change |
+| Depth estimation | ✅ Optional | Depth Anything v2 (relative depth, near/mid/far) |
+| Camera calibration + world coords | 🔧 Reserved | Config interface ready, awaiting hardware deployment |
 
-## 输出数据
+## Output Data
 
-### 中枢最关心的字段
+### Key Fields for the Controller
 
 ```json
 {
-  "actionable": true,          // 数据是否可信（robot stopped 时 true）
+  "actionable": true,          // Can the data be trusted? (true when robot stopped)
   "objects": [{
-    "track_id": 3,             // 持久跟踪 ID（跨帧稳定，用于追踪同一物体）
-    "class": "cup",            // YOLO 类别
-    "confidence": 0.91,        // 检测置信度
-    "track_age": 42,           // 跟踪了多少帧（越大越可信）
-    "position_confidence": 0.93, // Kalman 位置置信度 (0-1)
-    "velocity_confidence": 0.70, // Kalman 速度置信度 (0-1)
-    "smoothed_x": 0.45,       // Kalman 平滑归一化坐标 (0=左, 1=右)
-    "smoothed_y": 0.62,       // (0=上, 1=下)
-    "vx": -0.028,             // 归一化速度 (单位/秒，已补偿相机运动)
+    "track_id": 3,             // Persistent tracking ID (stable across frames)
+    "class": "cup",            // YOLO class
+    "confidence": 0.91,        // Detection confidence
+    "track_age": 42,           // Frames tracked (higher = more trustworthy)
+    "position_confidence": 0.93, // Kalman position confidence (0-1)
+    "velocity_confidence": 0.70, // Kalman velocity confidence (0-1)
+    "smoothed_x": 0.45,       // Kalman-smoothed normalized coords (0=left, 1=right)
+    "smoothed_y": 0.62,       // (0=top, 1=bottom)
+    "vx": -0.028,             // Normalized velocity (units/sec, camera-compensated)
     "vy": 0.015,
     "moving": true,
-    "reliable": true,          // 运动数据是否可信
-    "region": "middle_center", // 3x3 语义区域
-    "predicted_next": {"cx": 0.44, "cy": 0.62},  // 0.1秒后预测位置
-    "depth": {"value": 0.35, "label": "near"}     // 可选，需 --depth
+    "reliable": true,          // Is motion data trustworthy?
+    "region": "middle_center", // 3x3 semantic region
+    "predicted_next": {"cx": 0.44, "cy": 0.62},  // Predicted position 0.1s ahead
+    "depth": {"value": 0.35, "label": "near"}     // Optional, requires --depth
   }],
   "scene": {
     "risk_level": "medium",    // clear / low / medium / high
-    "center_occupied": true,   // 中心区域有物体（碰撞风险）
-    "stable": true,            // 场景是否稳定（无物体进出）
-    "snapshot_quality": 0.92   // 数据整体质量 (0-1)
+    "center_occupied": true,   // Object in center region (collision risk)
+    "stable": true,            // No objects entering/leaving
+    "snapshot_quality": 0.92   // Overall data quality (0-1)
   },
   "camera_motion": {
     "ego_state": "stopped",    // stopped / moving / settling
-    "confidence": 0.87,        // 光流补偿可信度
-    "compensated": true        // 坐标是否已补偿相机运动
+    "confidence": 0.87,        // Optical flow compensation reliability
+    "compensated": true        // Are coordinates camera-motion compensated?
   },
-  "changes": [                 // 变化事件（中枢可用于事件驱动）
+  "changes": [                 // Change events (for event-driven controllers)
     "object_entered: cup #3 appeared in middle_center",
     "risk_change: low → medium"
   ]
 }
 ```
 
-### Compact 模式 (--compact)
+### Compact Mode (--compact)
 
-~400 bytes/frame，带宽受限时使用：
+~400 bytes/frame for bandwidth-constrained links:
 
 ```json
 {"ts": 1711234567.12, "actionable": true,
@@ -222,28 +224,28 @@ Depth Anything v2 输出**相对深度**（0-1 归一化，帧内排序），不
  "changes": ["object_entered: cup #3 appeared in middle_center"]}
 ```
 
-## 中枢接入
+## Controller Integration
 
-### 方式 1: WebSocket (JSON-RPC 2.0)
+### Option 1: WebSocket (JSON-RPC 2.0)
 
 ```bash
 python main.py --ws --compact --strategy hybrid
 ```
 
-端口 18790，默认绑定 127.0.0.1。
+Port 18790, default bind 127.0.0.1.
 
-| 方法 | 参数 | 说明 |
-|------|------|------|
-| `scene/latest` | — | 获取最新场景 |
-| `scene/subscribe` | — | 订阅实时推送（感知主动推 `scene/update`）|
-| `ego/motion` | `{"moving": true, "vx": 0.1}` | 告诉感知"我在动"（**必须接入**）|
-| `config/set` | `{"key": "min_confidence", "value": 0.6}` | 运行时调参 |
-| `source/switch` | `{"source": 0}` | 切换视频源 |
-| `status/health` | — | 管线健康状态（state / fps / latency / degraded_modules）|
+| Method | Params | Description |
+|--------|--------|-------------|
+| `scene/latest` | — | Get latest scene |
+| `scene/subscribe` | — | Subscribe to real-time push (`scene/update`) |
+| `ego/motion` | `{"moving": true, "vx": 0.1}` | Tell perception "I'm moving" (**must integrate**) |
+| `config/set` | `{"key": "min_confidence", "value": 0.6}` | Runtime parameter tuning |
+| `source/switch` | `{"source": 0}` | Switch video source |
+| `status/health` | — | Pipeline health (state / fps / latency / degraded_modules) |
 
-**安全**：config/set 有 allowlist（只允许调感知参数，不能改 model_path 等敏感项），最多 32 连接，单消息 64KB 上限，错误响应不泄露内部细节。
+**Security**: config/set has an allowlist (only perception params, cannot modify model_path etc.), max 32 connections, 64KB message limit, error responses don't leak internals.
 
-### 方式 2: Python API（同进程集成）
+### Option 2: Python API (In-Process)
 
 ```python
 from perception_service import PerceptionService
@@ -251,101 +253,101 @@ from perception_service import PerceptionService
 svc = PerceptionService(config)
 svc.start()
 
-# 订阅场景更新（仅接收可信数据）
+# Subscribe to scene updates (only receive trusted data)
 svc.subscribe(on_scene, filter_fn=lambda s: s["actionable"])
 
-# 告诉感知模块：机械臂在移动
+# Tell perception: robot arm is moving
 svc.set_ego_motion(moving=True, vx=0.1, vy=0.0)
 
-# 获取最新场景
+# Get latest scene
 scene = svc.get_latest_scene()
 
-# 运行时调参
+# Runtime config
 svc.set_config("min_confidence", 0.6)
 
-# 健康检查
+# Health check
 health = svc.get_status()  # {"state": "running", "fps": 10, ...}
 
 svc.stop()
 ```
 
-### Ego Motion 接口（中枢必须接入）
+### Ego Motion Interface (Controller Must Integrate)
 
-中枢在机械臂运动前/后调用，感知模块据此判断数据可信度：
+The controller calls this before/after arm movement so perception can tag data reliability:
 
 ```
-中枢: ego/motion {"moving": true}   → 感知: 标记位置/运动/场景数据不可信
-中枢: ego/motion {"moving": false}  → 感知: 进入 settling，0.5s 后恢复可信
+Controller: ego/motion {"moving": true}   → Perception: marks position/motion/scene as untrusted
+Controller: ego/motion {"moving": false}  → Perception: enters settling, trusted again after 0.5s
 ```
 
-三种 ego 来源（config `ego_motion_source`）：
-- `"external"` — 中枢通过 RPC/API 告知（**生产推荐**）
-- `"optical_flow"` — 感知自动从画面推断（默认，开发用）
-- `"none"` — 不做运动补偿
+Three ego sources (config `ego_motion_source`):
+- `"external"` — Controller tells perception via RPC/API (**recommended for production**)
+- `"optical_flow"` — Perception auto-infers from video (default, for development)
+- `"none"` — No motion compensation
 
-**为什么 external 推荐**：光流推断有延迟和误判风险，中枢自己知道"我要动了"比感知猜更准确。
+**Why external is recommended**: Optical flow has detection delay and false positives. The controller knows "I'm about to move" more accurately than perception can guess.
 
-## 配置
+## Configuration
 
-所有默认值在 `config.py`。关键参数：
+All defaults in `config.py`. Key parameters:
 
 ```python
-"min_confidence": 0.45              # 检测置信度阈值（低 = 更多检测但更多误报）
-"process_fps": 10                   # 处理帧率（30 = 更低延迟，更高 CPU）
-"output_strategy": "hybrid"         # hybrid（推荐）/ stable / interval / on_change / every_frame
-"output_compact": False             # --compact 紧凑输出
-"ego_motion_source": "optical_flow" # "external"（推荐生产）/ "optical_flow" / "none"
-"ego_settle_sec": 0.5               # moving→stopped 过渡时间
-"kalman_process_noise": 0.01        # 越高 = 更信任观测，越低 = 更平滑
-"kalman_measurement_noise": 0.05    # 越高 = 更平滑但更滞后
-"depth_enabled": False              # --depth 启用深度估计
-"ws_enabled": False                 # --ws 启用 WebSocket
-"ws_host": "127.0.0.1"             # WebSocket 绑定地址（0.0.0.0 开放网络）
-"ws_port": 18790                    # WebSocket 端口（避开 OpenClaw Gateway 18789）
+"min_confidence": 0.45              # Detection confidence threshold (lower = more detections, more false positives)
+"process_fps": 10                   # Processing frame rate (30 = lower latency, higher CPU)
+"output_strategy": "hybrid"         # hybrid (recommended) / stable / interval / on_change / every_frame
+"output_compact": False             # --compact for minimal JSON output
+"ego_motion_source": "optical_flow" # "external" (recommended production) / "optical_flow" / "none"
+"ego_settle_sec": 0.5               # moving→stopped transition time
+"kalman_process_noise": 0.01        # Higher = trust observations more; Lower = smoother
+"kalman_measurement_noise": 0.05    # Higher = smoother but laggier
+"depth_enabled": False              # --depth to enable depth estimation
+"ws_enabled": False                 # --ws to enable WebSocket
+"ws_host": "127.0.0.1"             # WebSocket bind address (0.0.0.0 for network access)
+"ws_port": 18790                    # WebSocket port (avoids OpenClaw Gateway 18789)
 ```
 
 ## CLI
 
 ```
---source PATH       视频源 ("auto" / 0 / rtsp://... / video.mp4)
---model PATH        YOLO 模型 (default: yolov8n.pt)
---process-fps N     处理帧率 (default: 10)
---strategy NAME     输出策略: every_frame / interval / on_change / hybrid / stable
---compact           紧凑 JSON 输出
---interval SEC      输出间隔（秒）
---output METHOD     输出方式: print / file / callback
---classes A B C     只检测指定类别
---depth             启用深度估计（需 pip install -r requirements-depth.txt）
---depth-model SIZE  深度模型: small / base / large（default: small）
---gui               打开 GUI 调试面板（Detection / Output / Plugins / Source + Live JSON）
---ws                启用 WebSocket 服务
---ws-port PORT      WebSocket 端口 (default: 18790)
---no-viz            关闭可视化窗口
---dry-run           合成数据模式（不需要摄像头）
+--source PATH       Video source ("auto" / 0 / rtsp://... / video.mp4)
+--model PATH        YOLO model (default: yolov8n.pt)
+--process-fps N     Processing frame rate (default: 10)
+--strategy NAME     Output strategy: every_frame / interval / on_change / hybrid / stable
+--compact           Compact JSON output
+--interval SEC      Output interval (seconds)
+--output METHOD     Output method: print / file / callback
+--classes A B C     Only detect these classes
+--depth             Enable depth estimation (requires pip install -r requirements-depth.txt)
+--depth-model SIZE  Depth model: small / base / large (default: small)
+--gui               Open GUI debug panel (Detection / Output / Plugins / Source + Live JSON)
+--ws                Enable WebSocket server
+--ws-port PORT      WebSocket port (default: 18790)
+--no-viz            Disable visualization window
+--dry-run           Synthetic data mode (no camera needed)
 ```
 
-## 模块
+## Modules
 
 ```
-├── main.py                 入口，CLI，graceful shutdown
-├── config.py               配置默认值
-├── frame_grabber.py        线程化帧读取，自动检测，断线重连
-├── scene_builder.py        YOLO → 场景 JSON（Kalman + 运动补偿 + trust）
-├── kalman_tracker.py       2D Kalman（Joseph form，置信度 + 预测）
-├── scene_differ.py         帧间差分 → 变化事件（带去抖）
-├── output_controller.py    5 种输出策略
+├── main.py                 Entry point, CLI, graceful shutdown
+├── config.py               Configuration defaults
+├── frame_grabber.py        Threaded frame reader, auto-detect, reconnection
+├── scene_builder.py        YOLO → scene JSON (Kalman + motion compensation + trust)
+├── kalman_tracker.py       2D Kalman (Joseph form, confidence + prediction)
+├── scene_differ.py         Frame diff → change events (with debounce)
+├── output_controller.py    5 output strategies
 ├── output_handler.py       print / file / callback / compact
-├── depth_estimator.py      Depth Anything v2（可选，lazy-load，失败自动降级）
-├── visualizer.py           OpenCV 叠加显示
-├── metrics.py              延迟 / FPS / 健康监控
-├── perception_service.py   程序化 API（subscribe / set_ego_motion / get_status）
-├── ws_server.py            WebSocket JSON-RPC 2.0（线程安全 + allowlist + 连接限制）
-├── config_gui.py           tkinter 调试面板（4 组设置 + Live JSON + 实时指标）
-├── dry_run.py              合成数据生成器（schema 与真实管线一致）
+├── depth_estimator.py      Depth Anything v2 (optional, lazy-load, auto-degrade)
+├── visualizer.py           OpenCV overlay
+├── metrics.py              Latency / FPS / health monitoring
+├── perception_service.py   Programmatic API (subscribe / set_ego_motion / get_status)
+├── ws_server.py            WebSocket JSON-RPC 2.0 (thread-safe + allowlist + connection limit)
+├── config_gui.py           tkinter debug panel (4 setting groups + Live JSON + metrics)
+├── dry_run.py              Synthetic data generator (schema matches real pipeline)
 └── tests/                  246 tests, 14 test files, 14/14 modules covered
 ```
 
-## 坐标系
+## Coordinate System
 
 ```
 (0,0) ────────────────── (1,0)
@@ -358,60 +360,60 @@ svc.stop()
          x=0.33      x=0.67
 ```
 
-- **原点** `(0, 0)` = 画面左上角
-- **归一化** `rel_x = pixel_x / frame_width`，范围 0-1
-- **smoothed_x/y** = Kalman 滤波后的归一化坐标（已补偿相机运动）
-- **vx/vy** = 归一化速度（单位/秒），正值 = 向右/向下
-- **3x3 区域边界**：x 方向 0.33 / 0.67，y 方向 0.4 / 0.7（可通过 config 调整）
+- **Origin** `(0, 0)` = top-left corner of the frame
+- **Normalization**: `rel_x = pixel_x / frame_width`, range 0-1
+- **smoothed_x/y** = Kalman-filtered normalized coordinates (camera-motion compensated)
+- **vx/vy** = Normalized velocity (units/sec), positive = right/down
+- **3x3 region boundaries**: x at 0.33 / 0.67, y at 0.4 / 0.7 (configurable)
 
-## YOLO 模型选择
+## YOLO Model Selection
 
-| 模型 | 参数量 | 速度 (CPU) | 精度 (mAP) | 推荐场景 |
-|------|--------|-----------|-----------|---------|
-| **yolov8n.pt**（当前默认）| 3.2M | ~20ms | 37.3 | 实时性优先，嵌入式/CPU |
-| yolov8s.pt | 11.2M | ~50ms | 44.9 | 精度和速度平衡 |
-| yolov8m.pt | 25.9M | ~120ms | 50.2 | 高精度，需 GPU |
-| yolo11n.pt | 2.6M | ~18ms | 39.5 | 最新架构，推荐试用 |
+| Model | Parameters | Speed (CPU) | Accuracy (mAP) | Recommended For |
+|-------|-----------|-------------|-----------------|-----------------|
+| **yolov8n.pt** (current default) | 3.2M | ~20ms | 37.3 | Real-time priority, embedded/CPU |
+| yolov8s.pt | 11.2M | ~50ms | 44.9 | Balance of speed and accuracy |
+| yolov8m.pt | 25.9M | ~120ms | 50.2 | High accuracy, requires GPU |
+| yolo11n.pt | 2.6M | ~18ms | 39.5 | Latest architecture, worth trying |
 
-切换模型：`python main.py --model yolov8s.pt` 或修改 config `"model_path"`。模型会自动下载。
+Switch models: `python main.py --model yolov8s.pt` or modify config `"model_path"`. Models auto-download.
 
-## Track ID 行为
+## Track ID Behavior
 
-- `track_id` 由 ByteTrack 分配，**跨帧稳定**：同一物体在连续帧中保持相同 ID
-- 物体被遮挡 < 2 秒：Kalman 预测维持状态，重新出现后 ID 保持不变
-- 物体消失 > 2 秒（`track_lost_timeout`）：ID 释放，重新出现会分配新 ID
-- **新物体确认**：默认 1 帧即确认（`track_confirm_frames=1`，信任 ByteTrack）
-- **丢失缓冲**：连续 10 帧未检测到才真正移除（`track_lost_frames=10`）
-- `track_age` 字段表示该 ID 被跟踪了多少帧，越大越可信
+- `track_id` is assigned by ByteTrack, **stable across frames**: same object keeps the same ID in consecutive frames
+- Object occluded < 2 seconds: Kalman predicts state, ID preserved on re-appearance
+- Object gone > 2 seconds (`track_lost_timeout`): ID released, re-appearance gets a new ID
+- **New object confirmation**: Default 1 frame (`track_confirm_frames=1`, trusts ByteTrack)
+- **Loss buffer**: Must be missing for 10 consecutive frames before removal (`track_lost_frames=10`)
+- `track_age` indicates how many frames the ID has been tracked — higher = more trustworthy
 
-## 降级和容错
+## Degradation & Fault Tolerance
 
-| 故障 | 行为 | 管线状态 |
-|------|------|---------|
-| 摄像头断开 | FrameGrabber 自动重连（网络流最多 5 次），USB/文件直接退出 | `state: error` |
-| YOLO 推理失败 | 跳过该帧，继续下一帧，输出上一次有效场景 | `degraded_modules: ["yolo"]` |
-| Depth 加载超时 (30s) | 自动关闭 depth，核心管线继续 | `degraded_modules: ["depth"]` |
-| Depth 推理失败 | 返回 None，该帧无 depth 数据，其余正常 | 正常 |
-| 光流置信度低 | 自动停止运动补偿（`compensated: false`）| 正常 |
-| WebSocket 客户端断开 | 自动清理，不影响其他客户端和管线 | 正常 |
-| 输出文件路径无效 | 启动时报错退出（RuntimeError） | 不启动 |
+| Fault | Behavior | Pipeline State |
+|-------|----------|---------------|
+| Camera disconnected | FrameGrabber auto-reconnects (network: up to 5 retries), USB/file exits | `state: error` |
+| YOLO inference failure | Skips frame, continues next, outputs last valid scene | `degraded_modules: ["yolo"]` |
+| Depth load timeout (30s) | Auto-disables depth, core pipeline continues | `degraded_modules: ["depth"]` |
+| Depth inference failure | Returns None, no depth data for that frame, rest normal | Normal |
+| Low optical flow confidence | Auto-stops motion compensation (`compensated: false`) | Normal |
+| WebSocket client disconnects | Auto-cleanup, no impact on other clients or pipeline | Normal |
+| Invalid output file path | Exits on startup (RuntimeError) | Does not start |
 
-**设计原则：核心 2D 管线永远跑，增强模块失败自动降级。** `pipeline.degraded_modules` 告诉中枢哪些能力受损。
+**Design principle: Core 2D pipeline always runs. Enhancement modules auto-degrade on failure.** `pipeline.degraded_modules` tells the controller which capabilities are impaired.
 
-## 已知限制
+## Known Limitations
 
-- **小目标**：< 32x32 像素的物体 YOLO 容易漏检
-- **遮挡**：物体被完全遮挡后 Kalman 只能预测 ~2 秒，之后丢失
-- **相似外观**：多个相同类别物体紧挨着时 ByteTrack 可能混淆 ID
-- **快速运动**：物体在帧间移动 > 画面宽度 1/3 时跟踪可能断裂
-- **光照变化**：剧烈光照变化（开灯/关灯）会短暂影响检测和光流
-- **单目深度**：Depth Anything v2 是相对深度，不是绝对距离，且帧间不一致
-- **CPU 延迟**：Depth 在 CPU 上 ~350ms/帧，实时性受限；建议有 GPU 再开
+- **Small objects**: < 32x32 pixels are easily missed by YOLO
+- **Occlusion**: Kalman can only predict ~2 seconds after full occlusion, then lost
+- **Similar appearance**: Multiple same-class objects close together may confuse ByteTrack IDs
+- **Fast motion**: Objects moving > 1/3 frame width between frames may break tracking
+- **Lighting changes**: Sudden lighting changes (lights on/off) briefly affect detection and optical flow
+- **Monocular depth**: Depth Anything v2 is relative depth only, not absolute distance, and inconsistent across frames
+- **CPU latency**: Depth on CPU is ~350ms/frame, limiting real-time use; GPU recommended
 
-## 测试
+## Tests
 
 ```bash
 python -m pytest tests/ -v    # 246 tests, ~11s
 ```
 
-覆盖全部 14 个模块：scene_builder (81) / ws_server (20) / perception_service (16) / kalman (15) / output_controller (15) / scene_differ (15) / depth (14) / dry_run (13) / frame_grabber (12) / config_gui (12) / visualizer (10) / output_handler (8) / metrics (8) / config (7)
+Covers all 14 modules: scene_builder (81) / ws_server (20) / perception_service (16) / kalman (15) / output_controller (15) / scene_differ (15) / depth (14) / dry_run (13) / frame_grabber (12) / config_gui (12) / visualizer (10) / output_handler (8) / metrics (8) / config (7)
