@@ -1,8 +1,8 @@
 **English** | **[中文](README_CN.md)**
 
-# Perception Pipeline v3.2 — OpenClaw Vision Module
+# Perception Pipeline v3.2
 
-Camera feed → structured scene JSON. The **eyes** of the OpenClaw robot arm, not the brain.
+Camera feed → structured scene JSON for downstream robot / LLM decision-making. This is the **eyes**, not the brain.
 
 All computation happens here (detection, tracking, filtering, compensation, scene analysis). The central controller receives ready-to-use data — no further processing needed.
 
@@ -303,7 +303,7 @@ All defaults in `config.py`. Key parameters:
 "depth_enabled": False              # --depth to enable depth estimation
 "ws_enabled": False                 # --ws to enable WebSocket
 "ws_host": "127.0.0.1"             # WebSocket bind address (0.0.0.0 for network access)
-"ws_port": 18790                    # WebSocket port (avoids OpenClaw Gateway 18789)
+"ws_port": 18790                    # WebSocket port
 ```
 
 ## CLI

@@ -1,8 +1,8 @@
 **[English](README.md)** | **中文**
 
-# Perception Pipeline v3.2 — OpenClaw 视觉感知模块
+# Perception Pipeline v3.2
 
-摄像头画面 → 结构化场景 JSON。是 OpenClaw 机械臂的**眼睛**，不是大脑。
+摄像头画面 → 结构化场景 JSON，供下游机器人/LLM 做决策。这是**眼睛**，不是大脑。
 
 所有计算在这里完成（检测、跟踪、滤波、补偿、场景分析）。中枢拿到数据直接用，不需要再算。
 
@@ -84,7 +84,7 @@ Camera (auto-detect / USB / RTSP / file)
 2D 做不到的：
 - "杯子离我多远" → 归一化坐标不是物理距离
 - "两个杯子哪个更近" → 只能靠大小猜，不准
-- "机械臂要伸多长" → 需要真实深度 + 相机标定
+- "目标离我多远能够到" → 需要真实深度 + 相机标定
 
 **为什么这样选**：对中枢做高层决策（"去抓那个杯子"、"停下来有人"）2D 完全够用。单目深度是相对值，闭环抓取用不了。2D 管线最容易调试——检测器漏了、跟踪漂了、还是控制逻辑有问题，一目了然。
 
@@ -256,7 +256,7 @@ svc.start()
 # 订阅场景更新（仅接收可信数据）
 svc.subscribe(on_scene, filter_fn=lambda s: s["actionable"])
 
-# 告诉感知模块：机械臂在移动
+# 告诉感知模块：机器人在移动
 svc.set_ego_motion(moving=True, vx=0.1, vy=0.0)
 
 # 获取最新场景
@@ -273,7 +273,7 @@ svc.stop()
 
 ### Ego Motion 接口（中枢必须接入）
 
-中枢在机械臂运动前/后调用，感知模块据此判断数据可信度：
+中枢在机器人运动前/后调用，感知模块据此判断数据可信度：
 
 ```
 中枢: ego/motion {"moving": true}   → 感知: 标记位置/运动/场景数据不可信
@@ -303,7 +303,7 @@ svc.stop()
 "depth_enabled": False              # --depth 启用深度估计
 "ws_enabled": False                 # --ws 启用 WebSocket
 "ws_host": "127.0.0.1"             # WebSocket 绑定地址（0.0.0.0 开放网络）
-"ws_port": 18790                    # WebSocket 端口（避开 OpenClaw Gateway 18789）
+"ws_port": 18790                    # WebSocket 端口
 ```
 
 ## CLI
