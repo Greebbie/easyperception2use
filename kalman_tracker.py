@@ -105,7 +105,9 @@ class KalmanFilter2D:
             )
 
         self.x = x_pred + K @ y_res
-        self.P = (np.eye(4) - K @ self.H) @ P_pred
+        # Joseph stabilized form (numerically stable, keeps P symmetric PSD)
+        I_KH = np.eye(4) - K @ self.H
+        self.P = I_KH @ P_pred @ I_KH.T + K @ self.R @ K.T
 
         return (
             float(self.x[0]),
@@ -184,7 +186,6 @@ class KalmanTracker:
                 process_noise=self._process_noise,
                 measurement_noise=self._measurement_noise,
             )
-            self._update_count[track_id] = 0
         self._last_seen[track_id] = timestamp
         self._update_count[track_id] = self._update_count.get(track_id, 0) + 1
         return self._filters[track_id].predict_and_update(x, y, timestamp)

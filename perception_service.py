@@ -6,8 +6,6 @@ import time
 import uuid
 from typing import Any, Callable, Optional
 
-import cv2
-
 from config import DEFAULT_CONFIG
 from metrics import PipelineMetrics
 from output_controller import OutputController
@@ -57,7 +55,6 @@ class PerceptionService:
         """Start the pipeline in a background thread."""
         if self._running:
             return
-        self._running = True
         self.metrics.set_state("initializing")
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -68,10 +65,10 @@ class PerceptionService:
         self.metrics.set_state("stopped")
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5.0)
-        if self._grabber:
-            self._grabber.release()
-        if self._output_handler:
-            self._output_handler.close()
+        # Resources are released by _cleanup() in the thread's finally block.
+        # Only release here if thread died without cleanup (timeout).
+        if self._thread and self._thread.is_alive():
+            self._force_release()
 
     def get_latest_scene(self) -> Optional[dict]:
         """Get the most recent scene JSON (non-blocking)."""
@@ -133,12 +130,14 @@ class PerceptionService:
         """Main pipeline loop (runs in background thread)."""
         try:
             self._init_components()
+            self._running = True
             self.metrics.set_state("running")
             self._main_loop()
         except Exception as e:
             print(f"[PerceptionService] Fatal error: {e}")
             self.metrics.set_state("error")
         finally:
+            self._running = False
             self._cleanup()
 
     def _init_components(self) -> None:
@@ -243,7 +242,7 @@ class PerceptionService:
                     and self._depth_estimator.enabled
                     and self.config.get("depth_enabled")):
                 depth_map = self._depth_estimator.estimate(frame)
-                if depth_map is None and self._depth_estimator._load_failed:
+                if depth_map is None and self._depth_estimator.load_failed:
                     self.metrics.add_degraded_module("depth")
 
             t_depth = time.time()
@@ -322,9 +321,26 @@ class PerceptionService:
                 print(f"[PerceptionService] Subscriber {sub_id} error: {e}")
 
     def _cleanup(self) -> None:
-        """Release all resources."""
+        """Release all resources (called from pipeline thread's finally block)."""
         if self._grabber:
             self._grabber.release()
+            self._grabber = None
         if self._output_handler:
             self._output_handler.close()
+            self._output_handler = None
         print("[PerceptionService] Stopped")
+
+    def _force_release(self) -> None:
+        """Emergency release if thread did not clean up in time."""
+        if self._grabber:
+            try:
+                self._grabber.release()
+            except Exception:
+                pass
+            self._grabber = None
+        if self._output_handler:
+            try:
+                self._output_handler.close()
+            except Exception:
+                pass
+            self._output_handler = None

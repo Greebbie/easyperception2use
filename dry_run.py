@@ -161,12 +161,12 @@ class DryRunGenerator:
             speed = (obj.vx**2 + obj.vy**2) ** 0.5
             moving = speed > 0.02
 
-            if abs(obj.vx) > abs(obj.vy):
-                direction = "right" if obj.vx > 0 else "left"
-            elif speed > 0.02:
-                direction = "down" if obj.vy > 0 else "up"
-            else:
+            if not moving:
                 direction = "stationary"
+            elif abs(obj.vx) > abs(obj.vy):
+                direction = "right" if obj.vx > 0 else "left"
+            else:
+                direction = "down" if obj.vy > 0 else "up"
 
             # Region calculation (matching SceneBuilder logic)
             if obj.x < 0.33:
@@ -187,9 +187,14 @@ class DryRunGenerator:
                 "track_id": obj.track_id,
                 "class": obj.cls_name,
                 "confidence": round(obj.confidence, 3),
+                "track_age": self._frame_id + 1,
+                "position_confidence": 0.9,
+                "velocity_confidence": 0.5,
                 "position": {
                     "rel_x": round(obj.x, 3),
                     "rel_y": round(obj.y, 3),
+                    "smoothed_x": round(obj.x, 3),
+                    "smoothed_y": round(obj.y, 3),
                     "rel_size": round(rel_size, 4),
                     "region": f"{row}_{col}",
                 },
@@ -200,13 +205,14 @@ class DryRunGenerator:
                     "vx": round(obj.vx, 4),
                     "vy": round(obj.vy, 4),
                     "moving": moving,
+                    "reliable": True,
                 },
             })
 
         # Build scene summary
         center_objects = [o for o in objects if "center" in o["position"]["region"]]
         moving_objects = [o for o in objects if o["motion"]["moving"]]
-        largest = max(objects, key=lambda o: o["position"]["rel_size"])
+        largest = max(objects, key=lambda o: o["position"]["rel_size"]) if objects else None
 
         risk = "clear"
         if center_objects:
@@ -228,9 +234,23 @@ class DryRunGenerator:
         self._frame_id += 1
         return {
             "frame_id": self._frame_id,
-            "schema_version": "3.1",
+            "schema_version": "3.2",
             "timestamp": timestamp,
             "frame_size": {"w": self.frame_w, "h": self.frame_h},
+            "actionable": True,
+            "trust": {
+                "detection": True,
+                "position": True,
+                "motion": True,
+                "scene": True,
+            },
+            "camera_motion": {
+                "tx": 0.0,
+                "ty": 0.0,
+                "compensated": True,
+                "confidence": 1.0,
+                "ego_state": "stopped",
+            },
             "objects": objects,
             "scene": {
                 "object_count": len(objects),
@@ -239,11 +259,14 @@ class DryRunGenerator:
                     "class": largest["class"],
                     "track_id": largest["track_id"],
                     "rel_size": largest["position"]["rel_size"],
-                },
+                } if largest else None,
                 "risk_level": risk,
                 "classes_present": list(set(o["class"] for o in objects)),
                 "moving_count": len(moving_objects),
                 "region_summary": region_summary,
+                "stable": True,
+                "time_since_change_sec": 999.0,
+                "snapshot_quality": 0.9,
             },
             "meta": {
                 "active_tracks": len(objects),

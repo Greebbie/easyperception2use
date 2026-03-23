@@ -80,7 +80,7 @@ class FrameGrabber:
                 print(f"[FrameGrabber] Connected: {self.source}")
                 return True
             retries += 1
-            if retries <= self.max_retries:
+            if retries < self.max_retries:
                 print(
                     f"[FrameGrabber] Connection failed, retrying in "
                     f"{self.retry_interval}s ({retries}/{self.max_retries})"
@@ -134,22 +134,23 @@ class FrameGrabber:
         """
         Get the latest frame (non-blocking).
 
+        Returns a copy to prevent race with the background read thread.
+
         Returns:
             (success, frame): frame may be None if no frame is available yet.
         """
         with self._frame_lock:
             if self._frame is None:
                 return False, None
-            return True, self._frame
+            return True, self._frame.copy()
 
     def get_frame_size(self) -> tuple[int, int] | None:
         """Get frame dimensions (width, height), or None if not connected."""
-        with self._frame_lock:
-            if self._cap and self._cap.isOpened():
-                w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                if w > 0 and h > 0:
-                    return w, h
+        if self._cap and self._cap.isOpened():
+            w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            if w > 0 and h > 0:
+                return w, h
         return None
 
     def is_alive(self) -> bool:

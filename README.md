@@ -1,29 +1,21 @@
-# Perception Pipeline v3.2
+# Perception Pipeline v3.2 — OpenClaw 视觉感知模块
 
-Camera video stream → structured scene JSON for downstream LLM/robot decision-making.
+摄像头画面 → 结构化场景 JSON。是 OpenClaw 机械臂的**眼睛**，不是大脑。
+
+所有计算在这里完成（检测、跟踪、滤波、补偿、场景分析）。中枢拿到数据直接用，不需要再算。
 
 ## Quick Start
 
 ```bash
 pip install -r requirements.txt
 
-# Auto-detect USB camera
-python main.py
-
-# With GUI debug panel
-python main.py --gui
-
-# Production mode (stable snapshots + compact JSON)
-python main.py --strategy stable --compact
-
-# Full features (GUI + WebSocket + depth)
-python main.py --gui --ws --depth
-
-# No camera — synthetic data for testing
-python main.py --dry-run
+python main.py                     # 自动检测 USB 摄像头
+python main.py --gui               # 摄像头 + GUI 调试面板 + 可视化
+python main.py --ws --compact      # 生产模式：WebSocket 推送 + 紧凑 JSON
+python main.py --dry-run           # 无摄像头，合成数据测试
 ```
 
-## Architecture
+## 架构
 
 ```
 Camera (auto-detect / USB / RTSP / file)
@@ -32,7 +24,7 @@ Camera (auto-detect / USB / RTSP / file)
       → Optical Flow         Camera egomotion estimation (foreground-masked)
         → Kalman Filter      2D smoothing on compensated coordinates
           → SceneBuilder     Results → scene JSON (trust model + ego state)
-            → SceneDiffer    Frame-to-frame diff → changes list (LLM-readable)
+            → SceneDiffer    Frame-to-frame diff → changes list
               → OutputController  5 strategies (every_frame/interval/on_change/hybrid/stable)
                 → OutputHandler   print / file (JSONL) / callback / compact mode
                 → WebSocket       JSON-RPC 2.0 push (port 18790)
@@ -40,280 +32,189 @@ Camera (auto-detect / USB / RTSP / file)
   → DepthEstimator          Depth Anything v2 (optional, --depth)
 ```
 
-## Key Design Decisions
+## 感知能力
 
-### Trust Model (actionable / trust)
+| 能力 | 状态 | 说明 |
+|------|------|------|
+| 目标检测 + 跟踪 | ✅ | YOLOv8n + ByteTrack，persistent track ID |
+| 位置平滑 + 速度估计 | ✅ | Kalman 2D（Joseph form），position/velocity confidence |
+| 位置预测 | ✅ | Kalman 0.1s 前瞻，`predicted_next` |
+| 相机运动补偿 | ✅ | 光流 + 前景遮罩，自动降级 |
+| 场景语义分析 | ✅ | risk_level / center_occupied / stable / snapshot_quality |
+| 变化事件 | ✅ | entered / left / approaching / retreating / region_change / risk_change |
+| 深度估计 | ✅ 可选 | Depth Anything v2（相对深度，near/mid/far）|
+| 相机标定 + 世界坐标 | 🔧 预留 | config 接口已备，待硬件部署启用 |
 
-Every JSON frame has a top-level `actionable` flag and per-category `trust` object. This tells the downstream LLM exactly what it can rely on:
+## 输出数据
 
-| ego_state | actionable | detection | position | motion | scene |
-|-----------|-----------|-----------|----------|--------|-------|
-| `stopped` | **true** | trust | trust | trust | trust |
-| `moving` | **false** | trust | **no** | **no** | **no** |
-| `settling` | **false** | trust | **no** | **no** | **no** |
-
-**Why**: When the robot moves, all objects shift in the frame. A stationary cup goes from `middle_center` to `middle_left` even though it didn't move. Only `class` + `track_id` + `confidence` remain valid.
-
-### LLM Integration Pattern
-
-```python
-scene = get_latest_scene()
-
-if scene["actionable"]:
-    # Full decision: position, motion, risk all reliable
-    plan_action(scene)
-else:
-    # Robot moving — only update inventory (what exists + track IDs)
-    update_inventory(scene["objects"])  # class + track_id only
-    wait_for_actionable()
-```
-
-### Ego Motion State Machine
-
-```
-STOPPED  →  (set_ego_motion(True))  →  MOVING
-MOVING   →  (set_ego_motion(False)) →  SETTLING
-SETTLING →  (0.5s elapsed)          →  STOPPED
-```
-
-Three ways to provide ego motion data:
-1. **WebSocket**: `{"method": "ego/motion", "params": {"moving": true}}`
-2. **Python API**: `svc.set_ego_motion(moving=True)`
-3. **Auto-infer**: When `ego_motion_source="optical_flow"`, low flow confidence auto-triggers moving state
-
-### Camera Motion Compensation
-
-- Compensated coordinates fed to Kalman filter (not raw)
-- Dense optical flow on 160x120 downsampled frame (~2ms)
-- Foreground objects masked from flow computation (prevents moving objects from corrupting estimate)
-- Automatic degradation: confidence < 0.3 disables compensation
-- Works for: stationary camera, small pan/tilt
-- Does NOT work for: robot driving forward (radial expansion), large rotation → use `ego_motion_source="external"`
-
-### Track Stability
-
-- ByteTrack handles low-confidence recovery internally (Stage 2: 0.1-0.25)
-- No conf parameter passed to YOLO track() — lets ByteTrack work optimally
-- Confidence filtering done post-ByteTrack in SceneBuilder (min_confidence=0.45)
-- Debounce aligned with ByteTrack: confirm=1 frame, lost=10 frames
-- Kalman grace period: filters survive 2s after track loss
-
-## JSON Output Schema (v3.2)
+### 中枢最关心的字段
 
 ```json
 {
-  "frame_id": 1234,
-  "schema_version": "3.2",
-  "timestamp": 1711234567.123,
-  "frame_size": {"w": 640, "h": 480},
-
-  "actionable": true,
-  "trust": {
-    "detection": true,
-    "position": true,
-    "motion": true,
-    "scene": true
-  },
-
-  "camera_motion": {
-    "tx": 0.003,
-    "ty": -0.001,
-    "compensated": true,
-    "confidence": 0.87,
-    "ego_state": "stopped"
-  },
-
-  "objects": [
-    {
-      "track_id": 3,
-      "class": "person",
-      "confidence": 0.912,
-      "track_age": 42,
-      "position_confidence": 0.93,
-      "velocity_confidence": 0.7,
-      "position": {
-        "rel_x": 0.45,
-        "rel_y": 0.62,
-        "smoothed_x": 0.447,
-        "smoothed_y": 0.618,
-        "rel_size": 0.087,
-        "region": "middle_center"
-      },
-      "bbox_px": {"x1": 412, "y1": 305, "x2": 668, "y2": 610},
-      "motion": {
-        "direction": "left",
-        "speed": 0.032,
-        "vx": -0.028,
-        "vy": 0.015,
-        "moving": true,
-        "reliable": true
-      },
-      "predicted_next": {"cx": 0.444, "cy": 0.62},
-      "depth": {"value": 0.35, "label": "near"}
-    }
-  ],
-
-  "changes": [
-    "region_change: person #3 moved from top_center to middle_center",
-    "risk_change: low -> medium"
-  ],
-
+  "actionable": true,          // 数据是否可信（robot stopped 时 true）
+  "objects": [{
+    "track_id": 3,             // 持久跟踪 ID
+    "class": "cup",            // YOLO 类别
+    "confidence": 0.91,        // 检测置信度
+    "smoothed_x": 0.45,       // Kalman 平滑归一化坐标 (0-1)
+    "smoothed_y": 0.62,
+    "vx": -0.028,             // 归一化速度 (单位/秒)
+    "vy": 0.015,
+    "moving": true,
+    "region": "middle_center", // 3x3 语义区域
+    "predicted_next": {"cx": 0.44, "cy": 0.62}
+  }],
   "scene": {
-    "object_count": 1,
-    "center_occupied": true,
-    "dominant_object": {"class": "person", "track_id": 3, "rel_size": 0.087},
-    "risk_level": "medium",
-    "classes_present": ["person"],
-    "moving_count": 1,
-    "region_summary": {"middle_center": ["person"]},
-    "stable": true,
-    "time_since_change_sec": 2.3,
-    "snapshot_quality": 0.92
+    "risk_level": "medium",    // clear / low / medium / high
+    "center_occupied": true,   // 中心区域有物体
+    "stable": true,            // 场景是否稳定
+    "snapshot_quality": 0.92   // 数据质量 (0-1)
   },
-
-  "pipeline": {"state": "running", "degraded_modules": [], "uptime_sec": 456.7},
-  "latency_ms": {"grab_to_detect": 12, "detect_to_depth": 0, "total": 17},
-  "meta": {"active_tracks": 1, "total_tracks_in_memory": 3, "dropped_by_confidence": 0}
+  "changes": [                 // 变化事件
+    "object_entered: cup #3 appeared in middle_center",
+    "risk_change: low → medium"
+  ]
 }
 ```
 
-### Field Reference
+### Trust Model
 
-**Top-level control fields:**
-| Field | Type | Description |
-|-------|------|-------------|
-| `actionable` | bool | **LLM reads this first.** true = safe to act on all data |
-| `trust.detection` | bool | class + track_id + confidence reliable (always true) |
-| `trust.position` | bool | coordinates + region reliable (false when robot moving) |
-| `trust.motion` | bool | velocity + direction reliable (false when robot moving) |
-| `trust.scene` | bool | risk + center_occupied reliable (false when robot moving) |
+每帧都有 `actionable` 标志和 `trust` 对象，告诉中枢哪些数据可信：
 
-**Per-object fields (new in v3.2):**
-| Field | Type | Description |
-|-------|------|-------------|
-| `track_age` | int | Frames this track has been alive (higher = more trustworthy) |
-| `position_confidence` | float | 0-1 from Kalman covariance (higher = more certain) |
-| `velocity_confidence` | float | 0-1 from Kalman velocity covariance |
-| `predicted_next` | {cx, cy} | Kalman-predicted position 0.1s ahead |
-| `motion.reliable` | bool | false when ego is moving/settling |
+| ego_state | actionable | 检测 | 位置 | 运动 | 场景 |
+|-----------|-----------|------|------|------|------|
+| `stopped` | **true** | ✅ | ✅ | ✅ | ✅ |
+| `moving` | **false** | ✅ | ❌ | ❌ | ❌ |
+| `settling` | **false** | ✅ | ❌ | ❌ | ❌ |
 
-**Scene-level fields (new in v3.2):**
-| Field | Type | Description |
-|-------|------|-------------|
-| `scene.stable` | bool | No object changes for `stable_window_sec` |
-| `scene.time_since_change_sec` | float | Seconds since last object enter/leave |
-| `scene.snapshot_quality` | float | 0-1 composite (avg position_confidence × stability) |
+**为什么**：机器人移动时所有物体在画面中位移，静止的杯子看起来也在"移动"。只有 class + track_id + confidence 始终可靠。
 
-**Camera motion:**
-| Field | Type | Description |
-|-------|------|-------------|
-| `camera_motion.ego_state` | str | `stopped` / `moving` / `settling` |
-| `camera_motion.confidence` | float | 0-1 optical flow reliability |
-| `camera_motion.compensated` | bool | Whether coordinates are motion-compensated |
+### Compact 模式 (--compact)
 
-### Compact JSON (--compact)
-
-~400 bytes per frame for bandwidth-constrained downstream:
+~400 bytes/frame，带宽受限时使用：
 
 ```json
-{
-  "ts": 1711234567.12,
-  "actionable": true,
-  "objects": [
-    {"id": 3, "cls": "person", "cx": 0.447, "cy": 0.618, "size": 0.087,
-     "region": "middle_center", "conf": 0.912, "age": 42, "pos_conf": 0.93,
-     "vx": -0.028, "vy": 0.015, "moving": true, "reliable": true,
-     "pred": {"cx": 0.444, "cy": 0.62}}
-  ],
-  "scene": {"count": 1, "risk": "medium", "center": true, "moving": 1,
-            "stable": true, "quality": 0.92},
-  "camera": {"tx": 0.003, "ty": -0.001, "conf": 0.87, "ego": "stopped"},
-  "changes": ["person #3 entered middle_center"]
-}
+{"ts": 1711234567.12, "actionable": true,
+ "objects": [{"id": 3, "cls": "cup", "cx": 0.45, "cy": 0.62,
+   "vx": -0.028, "vy": 0.015, "moving": true, "conf": 0.91,
+   "region": "middle_center", "reliable": true}],
+ "scene": {"risk": "medium", "center": true, "stable": true}}
 ```
 
-## WebSocket API (JSON-RPC 2.0)
+## 中枢接入
 
-Port 18790, enabled with `--ws`.
-
-| Method | Params | Description |
-|--------|--------|-------------|
-| `scene/latest` | — | Get latest scene JSON |
-| `scene/subscribe` | — | Subscribe to scene push updates |
-| `config/set` | `{"key": "...", "value": ...}` | Update config at runtime |
-| `source/switch` | `{"source": "rtsp://..."}` | Switch video source |
-| `status/health` | — | Health metrics (fps, latency, state) |
-| `ego/motion` | `{"moving": true, "vx": 0.1}` | Set robot ego-motion state |
-
-## CLI Arguments
-
-```
---source PATH       Video source ("auto" / 0 / rtsp://... / video.mp4)
---model PATH        YOLO model path (default: yolov8n.pt)
---process-fps N     Detection frame rate (default: 10)
---strategy NAME     Output: every_frame / interval / on_change / hybrid / stable
---compact           Output minimal JSON for downstream LLM/Claw
---interval SEC      Output interval in seconds
---output METHOD     Output method: print / file / callback
---classes A B C     Only detect these classes
---depth             Enable depth estimation
---depth-model SIZE  Depth model: small / base / large
---gui               Open config GUI panel (with live JSON viewer)
---ws                Start WebSocket server
---ws-port PORT      WebSocket port (default: 18790)
---no-viz            Disable visualization window
---dry-run           Synthetic data mode (no camera needed)
-```
-
-## Configuration
-
-All defaults in `config.py`. Key settings:
-
-```python
-# Video source
-"source": "auto"                    # auto-detect USB, or specify 0, "rtsp://..."
-
-# Detection
-"min_confidence": 0.45              # SceneBuilder output filter (ByteTrack uses its own thresholds)
-
-# Tracking stability
-"track_confirm_frames": 1           # Frames to confirm new track (1 = trust ByteTrack)
-"track_lost_frames": 10             # Frames before removing lost track
-
-# Ego motion
-"ego_motion_source": "optical_flow" # "optical_flow" / "external" / "none"
-"ego_settle_sec": 0.5               # Settling → stopped transition time
-"ego_auto_detect": True             # Auto-infer moving from optical flow quality
-
-# Output
-"output_strategy": "hybrid"         # or "stable" for LLM consumption
-"output_compact": False             # --compact flag
-"stable_window_sec": 1.0            # Stable mode: seconds of no-change before output
-```
-
-## Modules
-
-```
-├── main.py                 Entry point, CLI args, graceful shutdown
-├── config.py               Centralized config defaults
-├── frame_grabber.py        Threaded frame reader, auto-detect, reconnection
-├── scene_builder.py        YOLO → scene JSON (Kalman + motion compensation + trust model)
-├── kalman_tracker.py       Per-object 2D Kalman (confidence + prediction)
-├── scene_differ.py         Frame diff → changes list (with cooldown debounce)
-├── output_controller.py    5 output strategies (including stable mode)
-├── output_handler.py       print / file / callback / compact
-├── depth_estimator.py      Depth Anything v2 (optional, lazy-loaded)
-├── visualizer.py           OpenCV overlay
-├── metrics.py              Latency/FPS tracking
-├── perception_service.py   Programmatic API
-├── ws_server.py            WebSocket JSON-RPC 2.0 server
-├── config_gui.py           tkinter debug panel (collapsible settings + live JSON)
-├── dry_run.py              Synthetic data generator
-└── tests/                  pytest suite (38 tests)
-```
-
-## Tests
+### 方式 1: WebSocket (JSON-RPC 2.0)
 
 ```bash
-python -m pytest tests/ -v
+python main.py --ws --compact --strategy hybrid
 ```
+
+端口 18790，默认绑定 127.0.0.1。
+
+| 方法 | 参数 | 说明 |
+|------|------|------|
+| `scene/latest` | — | 获取最新场景 |
+| `scene/subscribe` | — | 订阅实时推送 |
+| `ego/motion` | `{"moving": true, "vx": 0.1}` | 告诉感知"我在动" |
+| `config/set` | `{"key": "min_confidence", "value": 0.6}` | 运行时调参 |
+| `source/switch` | `{"source": 0}` | 切换视频源 |
+| `status/health` | — | 管线健康状态 |
+
+安全：config/set 有 allowlist（只允许调感知参数，不能改 model_path 等敏感项），最多 32 连接，单消息 64KB 上限。
+
+### 方式 2: Python API
+
+```python
+from perception_service import PerceptionService
+
+svc = PerceptionService(config)
+svc.start()
+
+# 订阅场景更新（仅接收可信数据）
+svc.subscribe(on_scene, filter_fn=lambda s: s["actionable"])
+
+# 告诉感知模块：机械臂在移动
+svc.set_ego_motion(moving=True, vx=0.1, vy=0.0)
+
+# 获取最新场景
+scene = svc.get_latest_scene()
+
+svc.stop()
+```
+
+### Ego Motion 接口
+
+中枢在机械臂运动前/后调用，感知模块据此判断数据可信度：
+
+```
+中枢: ego/motion {"moving": true}   → 感知: 标记数据不可信
+中枢: ego/motion {"moving": false}  → 感知: 进入 settling，0.5s 后恢复可信
+```
+
+三种 ego 来源（config `ego_motion_source`）：
+- `"external"` — 中枢通过 RPC/API 告知（推荐）
+- `"optical_flow"` — 感知自动从画面推断（默认）
+- `"none"` — 不做运动补偿
+
+## 配置
+
+所有默认值在 `config.py`。关键参数：
+
+```python
+"min_confidence": 0.45              # 检测置信度阈值
+"process_fps": 10                   # 处理帧率（30 = 更低延迟）
+"output_strategy": "hybrid"         # hybrid（推荐）/ stable / interval / on_change / every_frame
+"output_compact": False             # --compact 紧凑输出
+"ego_motion_source": "optical_flow" # "external"（推荐生产）/ "optical_flow" / "none"
+"ego_settle_sec": 0.5               # moving→stopped 过渡时间
+"depth_enabled": False              # --depth 启用深度估计
+"ws_enabled": False                 # --ws 启用 WebSocket
+```
+
+## CLI
+
+```
+--source PATH       视频源 ("auto" / 0 / rtsp://... / video.mp4)
+--model PATH        YOLO 模型 (default: yolov8n.pt)
+--process-fps N     处理帧率 (default: 10)
+--strategy NAME     输出策略: every_frame / interval / on_change / hybrid / stable
+--compact           紧凑 JSON 输出
+--interval SEC      输出间隔（秒）
+--output METHOD     输出方式: print / file / callback
+--classes A B C     只检测指定类别
+--depth             启用深度估计
+--gui               打开 GUI 调试面板（含 Live JSON 预览）
+--ws                启用 WebSocket 服务
+--ws-port PORT      WebSocket 端口 (default: 18790)
+--no-viz            关闭可视化窗口
+--dry-run           合成数据模式（不需要摄像头）
+```
+
+## 模块
+
+```
+├── main.py                 入口，CLI，graceful shutdown
+├── config.py               配置默认值
+├── frame_grabber.py        线程化帧读取，自动检测，断线重连
+├── scene_builder.py        YOLO → 场景 JSON（Kalman + 运动补偿 + trust）
+├── kalman_tracker.py       2D Kalman（Joseph form，置信度 + 预测）
+├── scene_differ.py         帧间差分 → 变化事件（带去抖）
+├── output_controller.py    5 种输出策略
+├── output_handler.py       print / file / callback / compact
+├── depth_estimator.py      Depth Anything v2（可选，lazy-load）
+├── visualizer.py           OpenCV 叠加显示
+├── metrics.py              延迟 / FPS 监控
+├── perception_service.py   程序化 API
+├── ws_server.py            WebSocket JSON-RPC 2.0（线程安全 + 安全加固）
+├── config_gui.py           tkinter 调试面板（可折叠设置 + Live JSON）
+├── dry_run.py              合成数据生成器
+└── tests/                  246 tests, 14 test files, 14/14 modules covered
+```
+
+## 测试
+
+```bash
+python -m pytest tests/ -v    # 246 tests, ~11s
+```
+
+覆盖：scene_builder / kalman / depth / output / ws_server / frame_grabber / visualizer / config_gui / perception_service / dry_run / metrics / config / scene_differ / output_controller

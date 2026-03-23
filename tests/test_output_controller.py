@@ -89,3 +89,43 @@ class TestOutputController:
         ctrl.should_output(_make_scene(0, risk="low"))
         # Change triggers output even before interval
         assert ctrl.should_output(_make_scene(0.5, risk="high"))
+
+    # --- Stable strategy ---
+
+    def test_stable_first_call_is_change(self):
+        """First call always detects change → no output yet."""
+        ctrl = OutputController(strategy="stable", stable_window_sec=1.0)
+        assert not ctrl.should_output(_make_scene(0))
+
+    def test_stable_outputs_after_window(self):
+        """After stable_window_sec with no change, should output once."""
+        ctrl = OutputController(strategy="stable", stable_window_sec=1.0)
+        ctrl.should_output(_make_scene(0))  # first call, sets _last_change_time=0
+        assert not ctrl.should_output(_make_scene(0.5))  # too early
+        assert ctrl.should_output(_make_scene(1.0))  # stable window elapsed
+
+    def test_stable_emits_only_once(self):
+        """After emitting, no further output until scene changes again."""
+        ctrl = OutputController(strategy="stable", stable_window_sec=1.0)
+        ctrl.should_output(_make_scene(0))
+        ctrl.should_output(_make_scene(1.0))  # emits
+        assert not ctrl.should_output(_make_scene(2.0))  # already emitted
+        assert not ctrl.should_output(_make_scene(3.0))  # still no change
+
+    def test_stable_change_resets(self):
+        """After a change, output resets and waits for stability again."""
+        ctrl = OutputController(strategy="stable", stable_window_sec=1.0)
+        ctrl.should_output(_make_scene(0, risk="low"))
+        ctrl.should_output(_make_scene(1.0, risk="low"))  # emits (stable)
+        # Scene changes to high
+        assert not ctrl.should_output(_make_scene(1.5, risk="high"))
+        # Same high-risk scene — wait for stable window
+        assert not ctrl.should_output(_make_scene(2.0, risk="high"))
+        # Stable window elapsed (1.5 + 1.0 = 2.5)
+        assert ctrl.should_output(_make_scene(2.5, risk="high"))
+
+    # --- Unknown strategy ---
+
+    def test_unknown_strategy_returns_false(self):
+        ctrl = OutputController(strategy="nonexistent")
+        assert not ctrl.should_output(_make_scene(0))

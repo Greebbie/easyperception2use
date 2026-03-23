@@ -141,6 +141,43 @@ class TestSceneDiffer:
         changes = differ.diff(_make_scene(center=True))
         assert any("center_occupied" in c for c in changes)
 
+    def test_object_retreating(self):
+        differ = SceneDiffer()
+        differ.diff(_make_scene(
+            objects=[_make_obj(1, rel_size=0.10)], classes=["person"]
+        ))
+
+        changes = differ.diff(_make_scene(
+            objects=[_make_obj(1, rel_size=0.07)], classes=["person"]
+        ))
+        assert any("object_retreating" in c for c in changes)
+
+    def test_motion_stop(self):
+        differ = SceneDiffer()
+        differ.diff(_make_scene(
+            objects=[_make_obj(1, moving=True, direction="left")],
+            classes=["person"],
+        ))
+
+        changes = differ.diff(_make_scene(
+            objects=[_make_obj(1, moving=False)], classes=["person"]
+        ))
+        assert any("motion_stop" in c for c in changes)
+
+    def test_class_gone(self):
+        differ = SceneDiffer()
+        differ.diff(_make_scene(classes=["person", "car"]))
+
+        changes = differ.diff(_make_scene(classes=["person"]))
+        assert any("class_gone" in c and "car" in c for c in changes)
+
+    def test_center_cleared(self):
+        differ = SceneDiffer()
+        differ.diff(_make_scene(center=True))
+
+        changes = differ.diff(_make_scene(center=False))
+        assert any("center_cleared" in c for c in changes)
+
     def test_reset(self):
         differ = SceneDiffer()
         differ.diff(_make_scene(objects=[_make_obj(1)], classes=["person"]))

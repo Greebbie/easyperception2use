@@ -109,6 +109,11 @@ class DepthEstimator:
         self._loaded = True
         return True
 
+    @property
+    def load_failed(self) -> bool:
+        """Whether model loading has failed (read-only)."""
+        return self._load_failed
+
     def estimate(self, frame: np.ndarray) -> Optional[np.ndarray]:
         """
         Run depth estimation on a BGR frame.

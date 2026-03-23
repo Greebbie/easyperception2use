@@ -105,3 +105,61 @@ class TestKalmanTracker:
         tracker.update(2, 0.5, 0.5, 0.0)
         tracker.reset()
         assert len(tracker._filters) == 0
+
+    def test_predict_only_for_lost_track(self):
+        """Grace-period predict-only should return a prediction, not None."""
+        tracker = KalmanTracker()
+        tracker.update(1, 0.5, 0.5, 0.0)
+        tracker.update(1, 0.52, 0.5, 0.1)
+        result = tracker.predict(1, 0.2)
+        assert result is not None
+        sx, sy, vx, vy = result
+        # Position should have drifted from Kalman prediction
+        assert sx != 0.0
+
+    def test_predict_returns_none_for_unknown(self):
+        tracker = KalmanTracker()
+        assert tracker.predict(999, 1.0) is None
+
+    def test_confidence_increases_with_observations(self):
+        tracker = KalmanTracker()
+        tracker.update(1, 0.5, 0.5, 0.0)
+        early_pos, early_vel = tracker.get_confidence(1)
+        for i in range(20):
+            tracker.update(1, 0.5, 0.5, (i + 1) * 0.1)
+        late_pos, late_vel = tracker.get_confidence(1)
+        assert late_pos >= early_pos
+        assert late_vel >= early_vel
+
+    def test_predict_next_position(self):
+        tracker = KalmanTracker()
+        for i in range(10):
+            tracker.update(1, 0.3 + i * 0.01, 0.5, i * 0.1)
+        pred = tracker.predict_next(1, dt=0.1)
+        assert pred is not None
+        px, py = pred
+        # Should predict slightly ahead of last position
+        assert px > 0.38
+
+
+class TestKalmanNumericalStability:
+    def test_long_run_covariance_stays_psd(self):
+        """After many iterations, P should remain positive semi-definite (no NaN/negative eigenvalues)."""
+        import numpy as np
+        kf = KalmanFilter2D(process_noise=0.01, measurement_noise=0.05)
+        for i in range(1000):
+            kf.predict_and_update(0.5 + 0.001 * (i % 10), 0.5, i * 0.1)
+
+        eigenvalues = np.linalg.eigvalsh(kf.P)
+        assert all(ev >= -1e-10 for ev in eigenvalues), f"Non-PSD covariance: {eigenvalues}"
+        assert not np.any(np.isnan(kf.x)), f"NaN in state: {kf.x}"
+
+    def test_confidence_stays_in_range(self):
+        """Position and velocity confidence should always be in [0, 1]."""
+        kf = KalmanFilter2D(process_noise=0.01, measurement_noise=0.05)
+        for i in range(500):
+            kf.predict_and_update(0.5 + 0.01 * (i % 5 - 2), 0.5, i * 0.1)
+            pos_conf = kf.get_position_confidence()
+            vel_conf = kf.get_velocity_confidence()
+            assert 0.0 <= pos_conf <= 1.0, f"pos_conf={pos_conf} at iteration {i}"
+            assert 0.0 <= vel_conf <= 1.0, f"vel_conf={vel_conf} at iteration {i}"

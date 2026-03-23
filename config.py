@@ -56,7 +56,7 @@ DEFAULT_CONFIG: dict = {
 
     # === WebSocket Server ===
     "ws_enabled": False,                # opt-in, off by default
-    "ws_host": "0.0.0.0",              # bind address
+    "ws_host": "127.0.0.1",             # bind address (use 0.0.0.0 for network access)
     "ws_port": 18790,                   # port (avoids OpenClaw Gateway 18789)
 
     # =========================================================================

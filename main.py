@@ -1,5 +1,5 @@
 """
-Perception Pipeline v3.1 — Main entry point.
+Perception Pipeline v3.2 — Main entry point.
 
 Processes camera video streams into structured scene JSON
 for downstream LLM/robot decision-making.
@@ -51,7 +51,7 @@ def main() -> None:
     config = load_config(args)
 
     print("=" * 60)
-    print("  Perception Pipeline v3.1")
+    print("  Perception Pipeline v3.2")
     print("=" * 60)
     print(f"  Source:       {config['source']}")
     print(f"  Model:        {config['model_path']}")
@@ -176,18 +176,46 @@ def _run_live(config: dict) -> None:
 
     # WebSocket server
     ws_server = None
+    ws_scene_holder = {"scene": None}
     if config.get("ws_enabled"):
         from perception_service import PerceptionService
         from ws_server import WebSocketServer
 
-        # Create a lightweight service wrapper for WS
-        svc = PerceptionService(config)
+        # Create a minimal service stub for WS in live mode
+        # (the live pipeline owns the actual YOLO model + grabber)
+        svc = PerceptionService.__new__(PerceptionService)
+        svc.config = config
+        svc.metrics = metrics
+        svc._latest_scene = None
+        svc._scene_lock = __import__("threading").Lock()
+        svc._subscribers = {}
+        svc._sub_lock = __import__("threading").Lock()
+        svc._source_switch_queue = source_switch_queue
+        svc._builder = None
+
+        def _ws_get_latest():
+            return ws_scene_holder["scene"]
+        svc.get_latest_scene = _ws_get_latest
+        svc.get_status = metrics.get_health
+        svc.set_config = lambda k, v: config.__setitem__(k, v)
+        svc.switch_source = lambda s: _try_queue(source_switch_queue, s)
+        svc.set_ego_motion = lambda moving, vx=0.0, vy=0.0: (
+            builder.set_ego_motion(moving, vx, vy)
+        )
+
         ws_server = WebSocketServer(
             svc,
-            host=config.get("ws_host", "0.0.0.0"),
+            host=config.get("ws_host", "127.0.0.1"),
             port=config.get("ws_port", 18790),
         )
         ws_server.start()
+
+    def _try_queue(q, val):
+        try:
+            q.put_nowait(val)
+            return True
+        except queue.Full:
+            return False
 
     metrics.set_state("running")
     last_process_time = 0.0
@@ -260,7 +288,7 @@ def _run_live(config: dict) -> None:
                     and depth_estimator.enabled
                     and config.get("depth_enabled")):
                 depth_map = depth_estimator.estimate(frame)
-                if depth_map is None and depth_estimator._load_failed:
+                if depth_map is None and depth_estimator.load_failed:
                     metrics.add_degraded_module("depth")
                 elif depth_map is not None:
                     from depth_estimator import DepthEstimator
@@ -295,6 +323,11 @@ def _run_live(config: dict) -> None:
 
             last_scene_json = scene_json
 
+            # Forward scene to WebSocket server
+            if ws_server:
+                ws_scene_holder["scene"] = scene_json
+                ws_server._on_scene_update(scene_json)
+
             if output_ctrl.should_output(scene_json):
                 output_handler(scene_json)
 
@@ -303,8 +336,8 @@ def _run_live(config: dict) -> None:
                 gui.update_json(scene_json)
 
             # Visualization
-            if config.get("show_visualization") and viz and last_scene_json is not None:
-                viz_frame = viz.draw(frame.copy(), last_scene_json)
+            if config.get("show_visualization") and viz and scene_json is not None:
+                viz_frame = viz.draw(frame.copy(), scene_json)
                 scale = config.get("viz_scale", 1.0)
                 if scale != 1.0:
                     viz_frame = cv2.resize(viz_frame, None, fx=scale, fy=scale)
@@ -317,13 +350,13 @@ def _run_live(config: dict) -> None:
     finally:
         print("[Main] Cleaning up resources...")
         metrics.set_state("stopped")
-        if gui:
-            gui.stop()
-        if ws_server:
-            ws_server.stop()
+        cv2.destroyAllWindows()
         grabber.release()
         output_handler.close()
-        cv2.destroyAllWindows()
+        if ws_server:
+            ws_server.stop()
+        if gui:
+            gui.stop()
         print("[Main] Exited")
 
 
@@ -452,18 +485,18 @@ def _run_dry_run(config: dict) -> None:
     finally:
         print("[Main] Cleaning up resources...")
         metrics.set_state("stopped")
-        if gui:
-            gui.stop()
+        cv2.destroyAllWindows()
+        output_handler.close()
         if ws_server:
             ws_server.stop()
-        output_handler.close()
-        cv2.destroyAllWindows()
+        if gui:
+            gui.stop()
         print("[Main] Exited")
 
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Perception Pipeline v3.1")
+    parser = argparse.ArgumentParser(description="Perception Pipeline v3.2")
     parser.add_argument("--source", default=None, help="Camera ID or video path")
     parser.add_argument("--model", default=None, help="YOLO model path")
     parser.add_argument("--process-fps", type=int, default=None,

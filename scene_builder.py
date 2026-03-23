@@ -16,6 +16,10 @@ class SceneBuilder:
     SCHEMA_VERSION = "3.2"
 
     def __init__(self, frame_width: int, frame_height: int, config: dict):
+        if frame_width <= 0 or frame_height <= 0:
+            raise ValueError(
+                f"Invalid frame dimensions: {frame_width}x{frame_height}"
+            )
         self.fw = frame_width
         self.fh = frame_height
         self.config = config
@@ -60,6 +64,8 @@ class SceneBuilder:
 
     def update_frame_size(self, width: int, height: int) -> None:
         """Update frame dimensions after a video source switch."""
+        if width <= 0 or height <= 0:
+            raise ValueError(f"Invalid frame dimensions: {width}x{height}")
         self.fw = width
         self.fh = height
         self.prev_positions.clear()
@@ -187,8 +193,6 @@ class SceneBuilder:
             comp_y = rel_y - self._global_dy
 
             # Kalman smoothing on compensated coordinates
-            smoothed_x, smoothed_y = comp_x, comp_y
-            kalman_vx, kalman_vy = 0.0, 0.0
             smoothed_x, smoothed_y, kalman_vx, kalman_vy = (
                 self._kalman.update(track_id, comp_x, comp_y, timestamp)
             )

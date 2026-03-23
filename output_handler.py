@@ -26,7 +26,12 @@ class OutputHandler:
 
         if method == "file":
             path = config.get("output_file_path", "scene_output.jsonl")
-            self._file = open(path, "a", encoding="utf-8")
+            try:
+                self._file = open(path, "a", encoding="utf-8")
+            except OSError as e:
+                raise RuntimeError(
+                    f"[OutputHandler] Cannot open output file '{path}': {e}"
+                ) from e
             print(f"[OutputHandler] Writing to file: {path}")
 
     def set_compact_fn(self, fn: Callable) -> None:
