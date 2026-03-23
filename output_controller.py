@@ -9,6 +9,7 @@ class OutputController:
         strategy: str = "interval",
         interval_sec: float = 1.0,
         change_threshold: float = 0.01,
+        stable_window_sec: float = 1.0,
     ):
         """
         Args:
@@ -17,14 +18,20 @@ class OutputController:
                 "interval"    -- fixed time interval output
                 "on_change"   -- output only on significant scene change
                 "hybrid"      -- interval + on_change (scheduled + burst)
+                "stable"      -- output once after scene stabilizes (for LLM/Claw)
             interval_sec: output interval for interval/hybrid modes (seconds)
             change_threshold: threshold for scene change detection (normalized)
+            stable_window_sec: how long scene must be stable before output (stable mode)
         """
         self.strategy = strategy
         self.interval_sec = interval_sec
         self.change_threshold = change_threshold
+        self.stable_window_sec = stable_window_sec
         self.last_output_time: float = 0
         self.last_output_scene: dict | None = None
+        # Stable mode state
+        self._last_change_time: float = 0
+        self._stable_emitted: bool = False
 
     def should_output(self, scene_json: dict) -> bool:
         """
@@ -59,6 +66,21 @@ class OutputController:
             interval_hit = (now - self.last_output_time) >= self.interval_sec
             change_hit = self._scene_changed(scene_json)
             if interval_hit or change_hit:
+                self.last_output_time = now
+                self.last_output_scene = scene_json
+                return True
+            return False
+
+        if self.strategy == "stable":
+            changed = self._scene_changed(scene_json)
+            if changed:
+                self._last_change_time = now
+                self._stable_emitted = False
+                self.last_output_scene = scene_json
+                return False
+            # Scene hasn't changed — check if stable window elapsed
+            if not self._stable_emitted and (now - self._last_change_time) >= self.stable_window_sec:
+                self._stable_emitted = True
                 self.last_output_time = now
                 self.last_output_scene = scene_json
                 return True

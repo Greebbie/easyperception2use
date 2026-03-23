@@ -1,8 +1,9 @@
 """tkinter configuration GUI for runtime parameter adjustment."""
 
+import json
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, scrolledtext
 from typing import Any, Callable
 
 
@@ -25,6 +26,7 @@ class ConfigGUI:
         self._root: tk.Tk | None = None
         self._thread: threading.Thread | None = None
         self._status_var: tk.StringVar | None = None
+        self._json_text: scrolledtext.ScrolledText | None = None
 
     def start(self) -> None:
         """Launch the GUI in a daemon thread."""
@@ -48,203 +50,202 @@ class ConfigGUI:
             except tk.TclError:
                 pass
 
+    def update_json(self, scene_json: dict) -> None:
+        """Update the live JSON preview (thread-safe)."""
+        if self._json_text and self._root:
+            text = json.dumps(scene_json, ensure_ascii=False, indent=2)
+            try:
+                self._root.after(0, lambda t=text: self._set_json_text(t))
+            except tk.TclError:
+                pass
+
+    def _set_json_text(self, text: str) -> None:
+        """Replace JSON text widget content (must run on tk thread)."""
+        if self._json_text:
+            self._json_text.config(state=tk.NORMAL)
+            self._json_text.delete("1.0", tk.END)
+            self._json_text.insert(tk.END, text)
+            self._json_text.config(state=tk.DISABLED)
+            self._json_text.see(tk.END)
+
     def _build_and_run(self) -> None:
         """Build the GUI and start the tkinter mainloop."""
         root = tk.Tk()
         root.title("Perception Pipeline - Settings")
-        root.geometry("420x680")
-        root.resizable(False, True)
+        root.geometry("600x1100")
+        root.resizable(True, True)
         self._root = root
 
-        main_frame = ttk.Frame(root, padding=8)
+        main_frame = ttk.Frame(root, padding=4)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # === Detection Section ===
-        det_frame = ttk.LabelFrame(main_frame, text="Detection", padding=6)
-        det_frame.pack(fill=tk.X, pady=(0, 6))
+        # === Collapsible Settings Section ===
+        self._settings_visible = tk.BooleanVar(value=False)
+        toggle_btn = ttk.Checkbutton(
+            main_frame, text="Settings", variable=self._settings_visible,
+            style="Toolbutton",
+            command=lambda: self._toggle_settings(settings_frame),
+        )
+        toggle_btn.pack(fill=tk.X, pady=(0, 4))
 
-        # Confidence
-        ttk.Label(det_frame, text="Min Confidence:").pack(anchor=tk.W)
+        settings_frame = ttk.Frame(main_frame)
+        # Start collapsed — don't pack
+
+        # --- Detection ---
+        det_frame = ttk.LabelFrame(settings_frame, text="Detection", padding=4)
+        det_frame.pack(fill=tk.X, pady=(0, 4))
+
+        row_det1 = ttk.Frame(det_frame)
+        row_det1.pack(fill=tk.X)
+        ttk.Label(row_det1, text="Confidence:").pack(side=tk.LEFT)
         conf_var = tk.DoubleVar(value=self._config.get("min_confidence", 0.3))
-        conf_label = ttk.Label(det_frame, text=f"{conf_var.get():.2f}")
-        conf_label.pack(anchor=tk.E)
-        conf_slider = ttk.Scale(
+        conf_label = ttk.Label(row_det1, text=f"{conf_var.get():.2f}", width=5)
+        conf_label.pack(side=tk.RIGHT)
+        ttk.Scale(
             det_frame, from_=0.05, to=0.95, variable=conf_var,
             command=lambda v: self._on_slider(
                 "min_confidence", float(v), conf_label, "{:.2f}"
             ),
-        )
-        conf_slider.pack(fill=tk.X)
+        ).pack(fill=tk.X)
 
-        # Process FPS
-        ttk.Label(det_frame, text="Process FPS:").pack(anchor=tk.W)
+        row_det2 = ttk.Frame(det_frame)
+        row_det2.pack(fill=tk.X)
+        ttk.Label(row_det2, text="FPS:").pack(side=tk.LEFT)
         fps_var = tk.IntVar(value=self._config.get("process_fps", 10))
-        fps_label = ttk.Label(det_frame, text=str(fps_var.get()))
-        fps_label.pack(anchor=tk.E)
-        fps_slider = ttk.Scale(
+        fps_label = ttk.Label(row_det2, text=str(fps_var.get()), width=5)
+        fps_label.pack(side=tk.RIGHT)
+        ttk.Scale(
             det_frame, from_=1, to=30, variable=fps_var,
             command=lambda v: self._on_slider(
                 "process_fps", int(float(v)), fps_label, "{}"
             ),
-        )
-        fps_slider.pack(fill=tk.X)
+        ).pack(fill=tk.X)
 
-        # Filter classes
-        ttk.Label(det_frame, text="Filter Classes (comma-sep, empty=all):").pack(
-            anchor=tk.W
-        )
-        classes_entry = ttk.Entry(det_frame)
+        row_det3 = ttk.Frame(det_frame)
+        row_det3.pack(fill=tk.X)
+        ttk.Label(row_det3, text="Classes:").pack(side=tk.LEFT)
+        classes_entry = ttk.Entry(row_det3, width=20)
         current_classes = self._config.get("filter_classes")
         if current_classes:
             classes_entry.insert(0, ", ".join(current_classes))
-        classes_entry.pack(fill=tk.X)
+        classes_entry.pack(side=tk.LEFT, padx=4, expand=True, fill=tk.X)
         ttk.Button(
-            det_frame, text="Apply Classes",
+            row_det3, text="Apply", width=6,
             command=lambda: self._apply_classes(classes_entry.get()),
-        ).pack(anchor=tk.E, pady=2)
+        ).pack(side=tk.RIGHT)
 
-        # === Output Section ===
-        out_frame = ttk.LabelFrame(main_frame, text="Output", padding=6)
-        out_frame.pack(fill=tk.X, pady=(0, 6))
+        # --- Output ---
+        out_frame = ttk.LabelFrame(settings_frame, text="Output", padding=4)
+        out_frame.pack(fill=tk.X, pady=(0, 4))
 
-        # Strategy
-        ttk.Label(out_frame, text="Strategy:").pack(anchor=tk.W)
+        row_out1 = ttk.Frame(out_frame)
+        row_out1.pack(fill=tk.X)
+        ttk.Label(row_out1, text="Strategy:").pack(side=tk.LEFT)
         strategy_var = tk.StringVar(
             value=self._config.get("output_strategy", "hybrid")
         )
         strategy_combo = ttk.Combobox(
-            out_frame, textvariable=strategy_var, state="readonly",
-            values=["every_frame", "interval", "on_change", "hybrid"],
+            row_out1, textvariable=strategy_var, state="readonly", width=14,
+            values=["every_frame", "interval", "on_change", "hybrid", "stable"],
         )
-        strategy_combo.pack(fill=tk.X)
+        strategy_combo.pack(side=tk.RIGHT)
         strategy_combo.bind(
             "<<ComboboxSelected>>",
             lambda e: self._on_change("output_strategy", strategy_var.get()),
         )
 
-        # Interval
-        ttk.Label(out_frame, text="Interval (sec):").pack(anchor=tk.W)
+        row_out2 = ttk.Frame(out_frame)
+        row_out2.pack(fill=tk.X)
+        ttk.Label(row_out2, text="Interval:").pack(side=tk.LEFT)
         interval_var = tk.DoubleVar(
             value=self._config.get("output_interval_sec", 1.0)
         )
-        interval_label = ttk.Label(out_frame, text=f"{interval_var.get():.1f}")
-        interval_label.pack(anchor=tk.E)
+        interval_label = ttk.Label(row_out2, text=f"{interval_var.get():.1f}s", width=5)
+        interval_label.pack(side=tk.RIGHT)
         ttk.Scale(
             out_frame, from_=0.1, to=10.0, variable=interval_var,
             command=lambda v: self._on_slider(
-                "output_interval_sec", round(float(v), 1), interval_label, "{:.1f}"
+                "output_interval_sec", round(float(v), 1), interval_label, "{:.1f}s"
             ),
         ).pack(fill=tk.X)
 
-        # Change threshold
-        ttk.Label(out_frame, text="Change Threshold:").pack(anchor=tk.W)
-        thresh_var = tk.DoubleVar(
-            value=self._config.get("output_change_threshold", 0.01)
-        )
-        thresh_label = ttk.Label(out_frame, text=f"{thresh_var.get():.3f}")
-        thresh_label.pack(anchor=tk.E)
-        ttk.Scale(
-            out_frame, from_=0.001, to=0.1, variable=thresh_var,
-            command=lambda v: self._on_slider(
-                "output_change_threshold", round(float(v), 3),
-                thresh_label, "{:.3f}"
-            ),
-        ).pack(fill=tk.X)
+        # --- Source / Viz / Depth / Motion in compact rows ---
+        misc_frame = ttk.LabelFrame(settings_frame, text="Source & Options", padding=4)
+        misc_frame.pack(fill=tk.X, pady=(0, 4))
 
-        # === Video Source Section ===
-        src_frame = ttk.LabelFrame(main_frame, text="Video Source", padding=6)
-        src_frame.pack(fill=tk.X, pady=(0, 6))
-
-        current_src = str(self._config.get("source", 0))
-        ttk.Label(src_frame, text=f"Current: {current_src}").pack(anchor=tk.W)
-
-        src_entry = ttk.Entry(src_frame)
-        src_entry.insert(0, current_src)
-        src_entry.pack(fill=tk.X, pady=2)
-
+        row_src = ttk.Frame(misc_frame)
+        row_src.pack(fill=tk.X, pady=1)
+        ttk.Label(row_src, text="Source:").pack(side=tk.LEFT)
+        src_entry = ttk.Entry(row_src, width=16)
+        src_entry.insert(0, str(self._config.get("source", 0)))
+        src_entry.pack(side=tk.LEFT, padx=4, expand=True, fill=tk.X)
         ttk.Button(
-            src_frame, text="Switch Source",
+            row_src, text="Switch", width=6,
             command=lambda: self._switch_source(src_entry.get()),
-        ).pack(anchor=tk.E, pady=2)
+        ).pack(side=tk.RIGHT)
 
-        # === Visualization Section ===
-        viz_frame = ttk.LabelFrame(main_frame, text="Visualization", padding=6)
-        viz_frame.pack(fill=tk.X, pady=(0, 6))
-
+        row_opts = ttk.Frame(misc_frame)
+        row_opts.pack(fill=tk.X, pady=1)
         viz_var = tk.BooleanVar(
             value=self._config.get("show_visualization", True)
         )
         ttk.Checkbutton(
-            viz_frame, text="Show Visualization", variable=viz_var,
-            command=lambda: self._on_change(
-                "show_visualization", viz_var.get()
-            ),
-        ).pack(anchor=tk.W)
-
-        ttk.Label(viz_frame, text="Scale:").pack(anchor=tk.W)
-        scale_var = tk.DoubleVar(value=self._config.get("viz_scale", 1.0))
-        scale_label = ttk.Label(viz_frame, text=f"{scale_var.get():.1f}")
-        scale_label.pack(anchor=tk.E)
-        ttk.Scale(
-            viz_frame, from_=0.5, to=2.0, variable=scale_var,
-            command=lambda v: self._on_slider(
-                "viz_scale", round(float(v), 1), scale_label, "{:.1f}"
-            ),
-        ).pack(fill=tk.X)
-
-        # === Depth Section ===
-        depth_frame = ttk.LabelFrame(main_frame, text="Depth Estimation", padding=6)
-        depth_frame.pack(fill=tk.X, pady=(0, 6))
-
+            row_opts, text="Viz", variable=viz_var,
+            command=lambda: self._on_change("show_visualization", viz_var.get()),
+        ).pack(side=tk.LEFT)
         depth_var = tk.BooleanVar(
             value=self._config.get("depth_enabled", False)
         )
         ttk.Checkbutton(
-            depth_frame, text="Enable Depth", variable=depth_var,
+            row_opts, text="Depth", variable=depth_var,
             command=lambda: self._on_change("depth_enabled", depth_var.get()),
-        ).pack(anchor=tk.W)
+        ).pack(side=tk.LEFT, padx=8)
 
-        ttk.Label(depth_frame, text="Model Size:").pack(anchor=tk.W)
-        depth_model_var = tk.StringVar(
-            value=self._config.get("depth_model_size", "small")
-        )
-        depth_combo = ttk.Combobox(
-            depth_frame, textvariable=depth_model_var, state="readonly",
-            values=["small", "base", "large"],
-        )
-        depth_combo.pack(fill=tk.X)
-        depth_combo.bind(
-            "<<ComboboxSelected>>",
-            lambda e: self._on_change("depth_model_size", depth_model_var.get()),
-        )
-
-        # === Motion Section ===
-        motion_frame = ttk.LabelFrame(main_frame, text="Motion & Risk", padding=6)
-        motion_frame.pack(fill=tk.X, pady=(0, 6))
-
-        ttk.Label(motion_frame, text="Motion Speed Threshold:").pack(anchor=tk.W)
+        row_motion = ttk.Frame(misc_frame)
+        row_motion.pack(fill=tk.X, pady=1)
+        ttk.Label(row_motion, text="Motion threshold:").pack(side=tk.LEFT)
         motion_var = tk.DoubleVar(
             value=self._config.get("motion_speed_threshold", 0.02)
         )
-        motion_label = ttk.Label(motion_frame, text=f"{motion_var.get():.3f}")
-        motion_label.pack(anchor=tk.E)
+        motion_label = ttk.Label(row_motion, text=f"{motion_var.get():.3f}", width=5)
+        motion_label.pack(side=tk.RIGHT)
         ttk.Scale(
-            motion_frame, from_=0.005, to=0.1, variable=motion_var,
+            misc_frame, from_=0.005, to=0.1, variable=motion_var,
             command=lambda v: self._on_slider(
                 "motion_speed_threshold", round(float(v), 3),
                 motion_label, "{:.3f}"
             ),
         ).pack(fill=tk.X)
 
+        # === Live JSON Preview (main area) ===
+        json_frame = ttk.LabelFrame(main_frame, text="Live JSON (Claw Output)", padding=4)
+        json_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+
+        self._json_text = scrolledtext.ScrolledText(
+            json_frame, wrap=tk.NONE, font=("Consolas", 10),
+            state=tk.DISABLED,
+        )
+        self._json_text.pack(fill=tk.BOTH, expand=True)
+
         # === Status Bar ===
         self._status_var = tk.StringVar(value="Ready")
         ttk.Label(
             main_frame, textvariable=self._status_var,
             relief=tk.SUNKEN, anchor=tk.W,
-        ).pack(fill=tk.X, pady=(6, 0))
+        ).pack(fill=tk.X, pady=(2, 0))
+
+        # Store settings_frame ref for toggle
+        self._settings_frame = settings_frame
 
         root.protocol("WM_DELETE_WINDOW", self.stop)
         root.mainloop()
+
+    def _toggle_settings(self, settings_frame: ttk.Frame) -> None:
+        """Show/hide the settings panel."""
+        if self._settings_visible.get():
+            settings_frame.pack(fill=tk.X, pady=(0, 4), before=self._json_text.master)
+        else:
+            settings_frame.pack_forget()
 
     def _on_slider(
         self, key: str, value: Any, label: ttk.Label, fmt: str

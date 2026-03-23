@@ -24,10 +24,20 @@ class FrameGrabber:
     ):
         """
         Args:
-            source: 0 (USB), "rtsp://..." (network stream), "video.mp4" (local file)
+            source: "auto" (auto-detect), 0 (USB), "rtsp://..." (network), "video.mp4" (file)
             max_retries: max reconnect attempts for network streams
             retry_interval: seconds between reconnect attempts
         """
+        # Auto-detect camera if source is "auto"
+        if source == "auto":
+            detected = self._auto_detect_source()
+            if detected is not None:
+                source = detected
+                print(f"[FrameGrabber] Auto-detected camera at index {source}")
+            else:
+                print("[FrameGrabber] Auto-detect failed, falling back to source=0")
+                source = 0
+
         self.source = source
         self.max_retries = max_retries
         self.retry_interval = retry_interval
@@ -47,10 +57,21 @@ class FrameGrabber:
         self._connect()
         self._start_thread()
 
+    @staticmethod
+    def _auto_detect_source() -> Optional[int]:
+        """Scan camera indices 0-3 and return the first available device."""
+        for idx in range(4):
+            cap = cv2.VideoCapture(idx)
+            if cap.isOpened():
+                cap.release()
+                return idx
+            cap.release()
+        return None
+
     def _connect(self) -> bool:
         """Open camera/video source. Retries on failure for network streams."""
         retries = 0
-        while retries <= self.max_retries:
+        while retries < self.max_retries:
             self._cap = cv2.VideoCapture(self.source)
             if self.is_network_stream:
                 self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -97,13 +118,17 @@ class FrameGrabber:
                     self._frame = frame
             else:
                 consecutive_failures += 1
-                if not self.is_network_stream:
-                    # Local file ended or USB disconnected
-                    self._running = False
-                    break
                 if consecutive_failures > 30:
-                    self._connected = False
-                    consecutive_failures = 0
+                    if self.is_network_stream:
+                        self._connected = False
+                        consecutive_failures = 0
+                    else:
+                        # USB camera or file — give up after sustained failures
+                        self._running = False
+                        break
+                else:
+                    # Brief pause before retry (helps USB camera recovery)
+                    time.sleep(0.05)
 
     def get_latest(self) -> tuple[bool, Optional[np.ndarray]]:
         """
@@ -115,15 +140,16 @@ class FrameGrabber:
         with self._frame_lock:
             if self._frame is None:
                 return False, None
-            return True, self._frame.copy()
+            return True, self._frame
 
     def get_frame_size(self) -> tuple[int, int] | None:
         """Get frame dimensions (width, height), or None if not connected."""
-        if self._cap and self._cap.isOpened():
-            w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            if w > 0 and h > 0:
-                return w, h
+        with self._frame_lock:
+            if self._cap and self._cap.isOpened():
+                w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                if w > 0 and h > 0:
+                    return w, h
         return None
 
     def is_alive(self) -> bool:

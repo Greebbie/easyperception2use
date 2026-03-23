@@ -7,11 +7,11 @@ DEFAULT_CONFIG: dict = {
     # =========================================================================
 
     # === Input ===
-    "source": 0,                        # 0=USB, "rtsp://...", "video.mp4"
+    "source": "auto",                    # "auto", 0=USB, "rtsp://...", "video.mp4"
 
     # === Detection ===
     "model_path": "yolov8n.pt",         # or yolo11n.pt
-    "min_confidence": 0.3,              # drop detections below this
+    "min_confidence": 0.45,             # drop detections below this
     "filter_classes": None,             # None=all, or ["person", "car", "dog"]
 
     # === Frame Rate Control ===
@@ -21,18 +21,26 @@ DEFAULT_CONFIG: dict = {
     "tracker": "bytetrack.yaml",        # or "botsort.yaml"
     "track_history_len": 10,            # how many frames of track history to keep
     "track_lost_timeout": 2.0,          # seconds before clearing lost track
+    "track_confirm_frames": 1,          # frames before output (1=trust ByteTrack)
+    "track_lost_frames": 10,            # frames missing before removal (aligned w/ ByteTrack buffer)
     "motion_speed_threshold": 0.02,     # normalized speed threshold (rel/sec)
+    "ego_motion_source": "optical_flow", # "optical_flow" / "external" / "none"
+    "ego_settle_sec": 0.5,              # settling → stopped transition time
+    "ego_auto_detect": True,            # auto-infer moving from optical flow quality
+    "differ_cooldown_sec": 0.5,         # cooldown for enter/leave events per track
 
     # === Kalman Filter ===
     "kalman_process_noise": 0.01,       # process noise (higher = trust measurements more)
     "kalman_measurement_noise": 0.05,   # measurement noise (higher = smoother but laggier)
 
     # === Output Control ===
-    "output_strategy": "hybrid",        # "every_frame" / "interval" / "on_change" / "hybrid"
+    "output_strategy": "hybrid",        # "every_frame"/"interval"/"on_change"/"hybrid"/"stable"
     "output_interval_sec": 1.0,         # interval for interval/hybrid mode
     "output_change_threshold": 0.01,    # change threshold for on_change/hybrid mode
     "output_method": "print",           # "print" / "file" / "callback"
     "output_file_path": "scene_output.jsonl",
+    "output_compact": False,            # --compact: output minimal JSON for downstream
+    "stable_window_sec": 1.0,           # stable mode: seconds of no-change before output
 
     # === Scene Analysis ===
     "risk_thresholds": {

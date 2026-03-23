@@ -83,7 +83,7 @@ def _run_live(config: dict) -> None:
 
     metrics = PipelineMetrics()
     metrics.set_state("initializing")
-    differ = SceneDiffer()
+    differ = SceneDiffer(cooldown_sec=config.get("differ_cooldown_sec", 0.5))
 
     # Load YOLO model
     try:
@@ -119,8 +119,11 @@ def _run_live(config: dict) -> None:
         strategy=config["output_strategy"],
         interval_sec=config["output_interval_sec"],
         change_threshold=config["output_change_threshold"],
+        stable_window_sec=config.get("stable_window_sec", 1.0),
     )
     output_handler = OutputHandler(config["output_method"], config)
+    if config.get("output_compact"):
+        output_handler.set_compact_fn(SceneBuilder.compact)
     viz = Visualizer() if config["show_visualization"] else None
 
     # Depth estimator
@@ -154,6 +157,7 @@ def _run_live(config: dict) -> None:
                     strategy=config["output_strategy"],
                     interval_sec=config["output_interval_sec"],
                     change_threshold=config["output_change_threshold"],
+                    stable_window_sec=config.get("stable_window_sec", 1.0),
                 )
             elif key == "depth_enabled":
                 nonlocal depth_estimator
@@ -273,7 +277,7 @@ def _run_live(config: dict) -> None:
             }
 
             scene_json = builder.build(
-                results, now, depth_fn=depth_fn, latency_ms=None
+                results, now, depth_fn=depth_fn, latency_ms=None, frame=frame
             )
 
             t_output = time.time()
@@ -293,6 +297,10 @@ def _run_live(config: dict) -> None:
 
             if output_ctrl.should_output(scene_json):
                 output_handler(scene_json)
+
+            # Update GUI JSON preview
+            if gui:
+                gui.update_json(scene_json)
 
             # Visualization
             if config.get("show_visualization") and viz and last_scene_json is not None:
@@ -325,15 +333,19 @@ def _run_dry_run(config: dict) -> None:
 
     metrics = PipelineMetrics()
     metrics.set_state("running")
-    differ = SceneDiffer()
+    differ = SceneDiffer(cooldown_sec=config.get("differ_cooldown_sec", 0.5))
 
     generator = DryRunGenerator(frame_w=1280, frame_h=720, num_objects=5)
     output_ctrl = OutputController(
         strategy=config["output_strategy"],
         interval_sec=config["output_interval_sec"],
         change_threshold=config["output_change_threshold"],
+        stable_window_sec=config.get("stable_window_sec", 1.0),
     )
     output_handler = OutputHandler(config["output_method"], config)
+    if config.get("output_compact"):
+        from scene_builder import SceneBuilder
+        output_handler.set_compact_fn(SceneBuilder.compact)
     viz = Visualizer() if config["show_visualization"] else None
 
     # GUI in dry-run
@@ -350,6 +362,7 @@ def _run_dry_run(config: dict) -> None:
                     strategy=config["output_strategy"],
                     interval_sec=config["output_interval_sec"],
                     change_threshold=config["output_change_threshold"],
+                    stable_window_sec=config.get("stable_window_sec", 1.0),
                 )
 
         gui = ConfigGUI(config, _on_config_change)
@@ -421,6 +434,10 @@ def _run_dry_run(config: dict) -> None:
             if output_ctrl.should_output(scene_json):
                 output_handler(scene_json)
 
+            # Update GUI JSON preview
+            if gui:
+                gui.update_json(scene_json)
+
             if config.get("show_visualization") and viz:
                 viz_frame = viz.draw(frame.copy(), scene_json)
                 scale = config.get("viz_scale", 1.0)
@@ -455,7 +472,9 @@ def parse_args() -> argparse.Namespace:
                         help="Output method: print / file / callback")
     parser.add_argument("--strategy", default=None,
                         help="Output strategy: every_frame / interval / "
-                             "on_change / hybrid")
+                             "on_change / hybrid / stable")
+    parser.add_argument("--compact", action="store_true",
+                        help="Output minimal JSON for downstream LLM/Claw")
     parser.add_argument("--interval", type=float, default=None,
                         help="Output interval (seconds)")
     parser.add_argument("--no-viz", action="store_true",
@@ -505,6 +524,8 @@ def load_config(args: argparse.Namespace) -> dict:
         config["depth_enabled"] = True
     if args.depth_model:
         config["depth_model_size"] = args.depth_model
+    if args.compact:
+        config["output_compact"] = True
     if args.gui:
         config["show_gui"] = True
     if args.ws:

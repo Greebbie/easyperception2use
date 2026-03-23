@@ -75,16 +75,29 @@ class TestKalmanTracker:
         assert abs(sx - 0.3) < 0.01
 
     def test_cleanup(self):
-        tracker = KalmanTracker()
+        tracker = KalmanTracker(lost_timeout=1.0)
         tracker.update(1, 0.1, 0.1, 0.0)
         tracker.update(2, 0.5, 0.5, 0.0)
         tracker.update(3, 0.9, 0.9, 0.0)
 
-        tracker.cleanup(active_ids={1, 3})
-        # Track 2 should be removed
+        # Track 2 removed after grace period expires
+        tracker.cleanup(active_ids={1, 3}, timestamp=2.0)
         assert 2 not in tracker._filters
         assert 1 in tracker._filters
         assert 3 in tracker._filters
+
+    def test_cleanup_grace_period(self):
+        tracker = KalmanTracker(lost_timeout=1.0)
+        tracker.update(1, 0.1, 0.1, 0.0)
+        tracker.update(2, 0.5, 0.5, 0.0)
+
+        # Within grace period — track 2 should survive
+        tracker.cleanup(active_ids={1}, timestamp=0.5)
+        assert 2 in tracker._filters
+
+        # After grace period — track 2 should be removed
+        tracker.cleanup(active_ids={1}, timestamp=1.5)
+        assert 2 not in tracker._filters
 
     def test_reset(self):
         tracker = KalmanTracker()

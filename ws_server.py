@@ -99,6 +99,7 @@ class WebSocketServer:
             "config/set": self._handle_config_set,
             "source/switch": self._handle_source_switch,
             "status/health": self._handle_status_health,
+            "ego/motion": self._handle_ego_motion,
         }
 
         handler = handler_map.get(method)
@@ -142,6 +143,17 @@ class WebSocketServer:
 
     def _handle_status_health(self, params: dict) -> dict:
         return self.service.get_status()
+
+    def _handle_ego_motion(self, params: dict) -> dict:
+        """Set robot ego-motion state from external source (odometry/IMU).
+
+        Params: {"moving": bool, "vx": float, "vy": float}
+        """
+        moving = bool(params.get("moving", False))
+        vx = float(params.get("vx", 0.0))
+        vy = float(params.get("vy", 0.0))
+        self.service.set_ego_motion(moving, vx, vy)
+        return {"moving": moving, "vx": vx, "vy": vy, "applied": True}
 
     def _on_scene_update(self, scene_json: dict) -> None:
         """Push scene updates to all subscribed WebSocket clients."""

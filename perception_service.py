@@ -47,7 +47,9 @@ class PerceptionService:
         self._model = None
         self._builder = None
         self._depth_estimator = None
-        self._differ = SceneDiffer()
+        self._differ = SceneDiffer(
+            cooldown_sec=self.config.get("differ_cooldown_sec", 0.5),
+        )
         self._output_ctrl = None
         self._output_handler = None
 
@@ -109,6 +111,11 @@ class PerceptionService:
                 self._source_switch_queue.put_nowait(value)
             except queue.Full:
                 pass
+
+    def set_ego_motion(self, moving: bool, vx: float = 0.0, vy: float = 0.0) -> None:
+        """Set robot ego-motion state (from odometry/IMU)."""
+        if self._builder:
+            self._builder.set_ego_motion(moving, vx, vy)
 
     def switch_source(self, source: int | str) -> bool:
         """Request a video source switch (async, returns immediately)."""
@@ -182,6 +189,7 @@ class PerceptionService:
             strategy=self.config["output_strategy"],
             interval_sec=self.config["output_interval_sec"],
             change_threshold=self.config["output_change_threshold"],
+            stable_window_sec=self.config.get("stable_window_sec", 1.0),
         )
         self._output_handler = OutputHandler(
             self.config["output_method"], self.config
@@ -246,8 +254,16 @@ class PerceptionService:
                 "detect_to_depth": round((t_depth - t_detect) * 1000, 1),
             }
 
+            # Build depth_fn from depth_map if available
+            depth_fn = None
+            if depth_map is not None:
+                from depth_estimator import DepthEstimator
+                depth_fn = lambda bbox_px, _dm=depth_map: (
+                    DepthEstimator.get_object_depth(_dm, bbox_px)
+                )
+
             scene_json = self._builder.build(
-                results, now, depth_map=depth_map, latency_ms=None
+                results, now, depth_fn=depth_fn, latency_ms=None, frame=frame
             )
 
             # Add pipeline info and latency
