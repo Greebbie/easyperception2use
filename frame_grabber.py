@@ -46,6 +46,10 @@ class FrameGrabber:
             or source.startswith("http://")
             or source.startswith("https://")
         )
+        self.is_video_file = isinstance(source, str) and (
+            source.endswith((".mp4", ".avi", ".mkv", ".mov", ".webm"))
+            and not self.is_network_stream
+        )
 
         self._frame: Optional[np.ndarray] = None
         self._frame_lock = threading.Lock()
@@ -99,6 +103,13 @@ class FrameGrabber:
     def _read_loop(self) -> None:
         """Background thread: continuously read frames, keep only the latest."""
         consecutive_failures = 0
+        # For video files, throttle to native FPS for real-time playback
+        video_delay = 0.0
+        if self.is_video_file and self._cap is not None:
+            native_fps = self._cap.get(cv2.CAP_PROP_FPS)
+            if native_fps > 0:
+                video_delay = 1.0 / native_fps
+
         while self._running:
             if not self._connected or self._cap is None or not self._cap.isOpened():
                 if self.is_network_stream:
@@ -116,14 +127,21 @@ class FrameGrabber:
                 consecutive_failures = 0
                 with self._frame_lock:
                     self._frame = frame
+                if video_delay > 0:
+                    time.sleep(video_delay)
             else:
+                if self.is_video_file:
+                    # Loop video files from the beginning
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    consecutive_failures = 0
+                    continue
                 consecutive_failures += 1
                 if consecutive_failures > 30:
                     if self.is_network_stream:
                         self._connected = False
                         consecutive_failures = 0
                     else:
-                        # USB camera or file — give up after sustained failures
+                        # USB camera — give up after sustained failures
                         self._running = False
                         break
                 else:

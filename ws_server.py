@@ -87,12 +87,11 @@ class WebSocketServer:
             if len(self._subscribers) >= _MAX_CONNECTIONS:
                 await websocket.close(1013, "Server at capacity")
                 return
-            self._subscribers.add(websocket)
 
         print(f"[WSServer] Client connected: {websocket.remote_address}")
         try:
             async for message in websocket:
-                response = self._handle_rpc(message)
+                response = self._handle_rpc(message, websocket)
                 if response is not None:
                     await websocket.send(json.dumps(response, ensure_ascii=False))
         except Exception as e:
@@ -102,7 +101,7 @@ class WebSocketServer:
                 self._subscribers.discard(websocket)
             print(f"[WSServer] Client disconnected: {websocket.remote_address}")
 
-    def _handle_rpc(self, raw_message: str) -> Optional[dict]:
+    def _handle_rpc(self, raw_message: str, websocket=None) -> Optional[dict]:
         """
         Parse and handle a JSON-RPC 2.0 request.
 
@@ -139,7 +138,10 @@ class WebSocketServer:
             return self._rpc_error(req_id, -32601, f"Method not found: {method}")
 
         try:
-            result = handler(params)
+            if method == "scene/subscribe":
+                result = handler(params, websocket=websocket)
+            else:
+                result = handler(params)
             if is_notification:
                 return None
             return self._rpc_result(req_id, result)
@@ -155,7 +157,10 @@ class WebSocketServer:
             return {"scene": None, "message": "No scene available yet"}
         return scene
 
-    def _handle_scene_subscribe(self, params: dict) -> dict:
+    def _handle_scene_subscribe(self, params: dict, websocket=None) -> dict:
+        if websocket is not None:
+            with self._sub_lock:
+                self._subscribers.add(websocket)
         return {"subscribed": True, "message": "You will receive scene updates"}
 
     def _handle_config_set(self, params: dict) -> dict:

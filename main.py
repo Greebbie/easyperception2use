@@ -328,6 +328,23 @@ def _run_live(config: dict) -> None:
                 ws_scene_holder["scene"] = scene_json
                 ws_server._on_scene_update(scene_json)
 
+            # Share annotated frame for demo MJPEG streaming
+            if config.get("share_frame_path"):
+                try:
+                    if viz is None:
+                        viz = Visualizer()
+                    share_frame = viz.draw(frame.copy(), scene_json)
+                    _, buf = cv2.imencode(".jpg", share_frame, [
+                        cv2.IMWRITE_JPEG_QUALITY, 75
+                    ])
+                    tmp_path = config["share_frame_path"] + ".tmp"
+                    with open(tmp_path, "wb") as f:
+                        f.write(buf.tobytes())
+                    import os
+                    os.replace(tmp_path, config["share_frame_path"])
+                except Exception as _share_err:
+                    print(f"[Main] Share frame error: {_share_err}")
+
             if output_ctrl.should_output(scene_json):
                 output_handler(scene_json)
 
@@ -528,6 +545,8 @@ def parse_args() -> argparse.Namespace:
                         help="Start WebSocket server (JSON-RPC 2.0)")
     parser.add_argument("--ws-port", type=int, default=None,
                         help="WebSocket server port (default: 18790)")
+    parser.add_argument("--share-frame", type=str, default=None,
+                        help="Path to write latest annotated frame JPEG (for demo streaming)")
     return parser.parse_args()
 
 
@@ -565,6 +584,8 @@ def load_config(args: argparse.Namespace) -> dict:
         config["ws_enabled"] = True
     if args.ws_port:
         config["ws_port"] = args.ws_port
+    if args.share_frame:
+        config["share_frame_path"] = args.share_frame
     return config
 
 
