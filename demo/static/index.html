@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EasyPerception — Investor Demo</title>
+  <title>EasyPerception — 场景智能中间层</title>
   <link rel="stylesheet" href="/static/style.css">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
@@ -11,70 +11,143 @@
 
   <!-- Header -->
   <div class="header">
-    <div style="display:flex;align-items:center;">
+    <div class="header-left">
       <h1>EasyPerception</h1>
-      <span class="subtitle">Real-time Vision Intelligence</span>
+      <span class="subtitle">场景智能中间层</span>
     </div>
-    <div class="tabs">
-      <button class="tab-btn active" onclick="switchTab('farm')">Scene Analysis</button>
-      <button class="tab-btn" onclick="switchTab('watch')">Agent</button>
+    <div class="header-status" id="connectionStatus">
+      <div class="status-dot"></div>
+      <span>连接中...</span>
     </div>
   </div>
 
-  <!-- Main Content -->
-  <div class="main">
-    <!-- Video Panel -->
-    <div class="video-panel">
-      <img id="videoFeed" src="/stream" alt="Live Feed">
-      <canvas id="zoneCanvas" class="hidden"></canvas>
-      <div id="drawHint" class="draw-hint hidden">Drag to select area</div>
-    </div>
+  <!-- Three-Panel Layout -->
+  <div class="panels">
 
-    <!-- Side Panel: Farm Demo -->
-    <div class="side-panel" id="farmPanel">
-      <div class="chat-container">
-        <div class="chat-header">Ask about what the camera sees</div>
-        <div class="suggestions">
-          <span class="suggestion-chip" onclick="sendQuery(this.textContent)">What do you see?</span>
-          <span class="suggestion-chip" onclick="sendQuery(this.textContent)">Count the cows</span>
-          <span class="suggestion-chip" onclick="sendQuery(this.textContent)">How many people?</span>
-          <span class="suggestion-chip" onclick="sendQuery(this.textContent)">Any animals?</span>
-        </div>
-        <div class="chat-messages" id="chatMessages">
-          <div class="message system">
-            Welcome! Ask me anything about what the camera sees. I'll analyze the scene in real-time.
-          </div>
-        </div>
-        <div class="chat-input-area">
-          <input type="text" class="chat-input" id="chatInput"
-                 placeholder="Ask a question..." autocomplete="off"
-                 onkeydown="if(event.key==='Enter')sendQuery()">
-          <button class="send-btn" id="sendBtn" onclick="sendQuery()">Send</button>
+    <!-- LEFT: Camera Layer -->
+    <div class="panel camera-panel">
+      <div class="panel-header">
+        <span class="panel-icon">📷</span>
+        <span class="panel-title">摄像头层</span>
+        <span class="panel-badge">品牌无关 · RTSP / USB / IP</span>
+      </div>
+      <div class="video-container">
+        <img id="videoFeed" src="/stream" alt="实时画面">
+        <canvas id="zoneCanvas"></canvas>
+        <div id="drawHint" class="draw-hint">拖拽框选监控区域，松手自动开始</div>
+        <div id="zoneStatus" class="zone-status hidden">
+          <span class="zone-status-dot"></span>
+          <span id="zoneStatusText">监控中</span>
+          <button class="zone-clear-btn" onclick="clearZone()" title="取消监控">✕</button>
         </div>
       </div>
     </div>
 
-    <!-- Side Panel: Agent Chat (triggers monitoring via conversation) -->
-    <div class="side-panel hidden" id="watchPanel">
-      <div class="chat-container">
-        <div class="chat-header">
-          Agent
-          <div class="status-indicator" style="padding:4px 0;border:none;">
-            <div class="status-dot" id="statusDot"></div>
-            <span id="statusText" style="font-weight:400;font-size:12px;color:var(--text-dim)">Ready</span>
-          </div>
+    <!-- CENTER: Scene Event Middleware -->
+    <div class="panel events-panel">
+      <div class="panel-header">
+        <span class="panel-icon">⚡</span>
+        <span class="panel-title">场景事件中间层</span>
+        <span class="panel-badge core-badge">核心产品</span>
+      </div>
+
+      <!-- Stats Row -->
+      <div class="stats-row" id="statsRow">
+        <div class="stat">
+          <div class="stat-value" id="statEvents">0</div>
+          <div class="stat-label">事件数</div>
         </div>
-        <div class="chat-messages" id="watchMessages">
+        <div class="stat">
+          <div class="stat-value" id="statTracks">0</div>
+          <div class="stat-label">追踪目标</div>
         </div>
-        <div class="chat-input-area">
-          <input type="text" class="chat-input" id="watchInput"
-                 placeholder="e.g. Watch this area, alert me if someone comes..."
-                 autocomplete="off"
-                 onkeydown="if(event.key==='Enter')sendWatchCommand()">
-          <button class="send-btn" id="watchSendBtn" onclick="sendWatchCommand()">Send</button>
+        <div class="stat">
+          <div class="stat-value" id="statAlerts">0</div>
+          <div class="stat-label">告警</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="statDwell">-</div>
+          <div class="stat-label">最长停留</div>
         </div>
       </div>
+
+      <!-- Dwell Timers -->
+      <div class="dwell-section" id="dwellSection" style="display:none;">
+        <div class="section-label">物品停留计时</div>
+        <div id="dwellTimers"></div>
+      </div>
+
+      <!-- Event Timeline -->
+      <div class="section-label">事件时间线</div>
+      <div class="event-timeline" id="eventTimeline">
+        <div class="event-empty">等待事件中...</div>
+      </div>
+
+      <!-- JSON Preview (collapsible) -->
+      <div class="json-section">
+        <div class="json-toggle" onclick="toggleJsonPreview()">
+          <span id="jsonArrow">▶</span> 标准化事件 JSON <span class="json-badge">中间层输出</span>
+        </div>
+        <pre class="json-preview hidden" id="jsonPreview">等待数据...</pre>
+      </div>
     </div>
+
+    <!-- RIGHT: LLM Central -->
+    <div class="panel llm-panel">
+      <div class="panel-header">
+        <span class="panel-icon">🧠</span>
+        <span class="panel-title">LLM 中枢</span>
+        <div class="threat-indicator" id="threatIndicator">
+          <div class="threat-dot threat-normal"></div>
+          <span id="threatText">正常</span>
+        </div>
+      </div>
+
+      <!-- LLM Alert Box -->
+      <div class="llm-section">
+        <div class="section-label">告警摘要</div>
+        <div class="llm-alert-box" id="llmAlertBox">
+          <div class="llm-placeholder">检测到事件后 LLM 将自动分析...</div>
+        </div>
+      </div>
+
+      <!-- LLM Narrative -->
+      <div class="llm-section">
+        <div class="section-label">事件叙事</div>
+        <div class="llm-narrative" id="llmNarrative">
+          <div class="llm-placeholder">等待事件分析...</div>
+        </div>
+      </div>
+
+      <!-- SOP Actions -->
+      <div class="llm-section">
+        <div class="section-label">建议动作</div>
+        <div class="llm-actions" id="llmActions">
+          <div class="llm-placeholder">暂无建议</div>
+        </div>
+      </div>
+
+      <!-- Chat History -->
+      <div class="llm-chat-history" id="chatHistory"></div>
+
+      <!-- Chat Input -->
+      <div class="llm-chat">
+        <input type="text" class="chat-input" id="llmInput"
+               placeholder="问我：发生了什么？水瓶放了多久？有异常吗？"
+               autocomplete="off"
+               onkeydown="if(event.key==='Enter')sendLLMQuery()">
+        <button class="btn btn-primary" onclick="sendLLMQuery()">提问</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Footer Status Bar -->
+  <div class="footer">
+    <span id="footerFPS">帧率: --</span>
+    <span id="footerLatency">延迟: --</span>
+    <span id="footerPipeline">管线: --</span>
+    <span id="footerMode" class="mode-badge">实时</span>
   </div>
 
   <script src="/static/app.js"></script>

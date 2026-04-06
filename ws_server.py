@@ -13,6 +13,7 @@ _SETTABLE_KEYS = {
     "output_strategy", "output_interval_sec", "output_compact",
     "motion_speed_threshold", "ego_motion_source", "ego_settle_sec",
     "stable_window_sec",
+    "track_lost_frames",
 }
 
 # Maximum simultaneous WebSocket connections

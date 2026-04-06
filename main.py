@@ -222,6 +222,8 @@ def _run_live(config: dict) -> None:
     last_scene_json = None
 
     try:
+        _last_good_share_buf = None  # Cache for frame with detections (anti-flicker)
+
         while not _shutdown_requested:
             # Handle source switch
             try:
@@ -334,12 +336,19 @@ def _run_live(config: dict) -> None:
                     if viz is None:
                         viz = Visualizer()
                     share_frame = viz.draw(frame.copy(), scene_json)
-                    _, buf = cv2.imencode(".jpg", share_frame, [
-                        cv2.IMWRITE_JPEG_QUALITY, 75
-                    ])
+
+                    # Cache last frame with detections to prevent flickering
+                    has_objects = len(scene_json.get("objects", [])) > 0
+                    if has_objects or _last_good_share_buf is None:
+                        _, _last_good_share_buf = cv2.imencode(
+                            ".jpg", share_frame,
+                            [cv2.IMWRITE_JPEG_QUALITY, 75],
+                        )
+                    # else: reuse cached frame (keeps bounding boxes visible)
+
                     tmp_path = config["share_frame_path"] + ".tmp"
                     with open(tmp_path, "wb") as f:
-                        f.write(buf.tobytes())
+                        f.write(_last_good_share_buf.tobytes())
                     import os
                     os.replace(tmp_path, config["share_frame_path"])
                 except Exception as _share_err:

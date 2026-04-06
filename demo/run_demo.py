@@ -24,6 +24,7 @@ def main():
         sys.executable, os.path.join(project_root, "main.py"),
         "--ws", "--no-viz",
         "--strategy", "hybrid",
+        "--model", "yolov8m.pt",  # Use medium model for best accuracy
     ]
     share_frame_path = os.path.join(project_root, "_demo_frame.jpg")
     if args.dry_run:
